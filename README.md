@@ -27,8 +27,6 @@ conda activate cadenza
 pip install PySide6 torch torchvision av numpy scipy
 ```
 
-Place `ffmpeg.exe` in the project root or ensure it is on your PATH.
-
 ## Usage
 
 ```bash
