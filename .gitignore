@@ -30,3 +30,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+render_test_NOT_USED/*
+render_test_NOT_USED
+
+ffmpeg_NOT_USED/*
+ffmpeg_NOT_USED
