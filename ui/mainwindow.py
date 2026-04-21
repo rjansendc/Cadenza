@@ -43,7 +43,7 @@ class MainWindow(QMainWindow):
         self.app_state = AppState(parent=self)
 
         # --- window setup ---
-        self.setWindowTitle('VideoEditor')
+        self.setWindowTitle('Cadenza')
         self.setWindowIcon(_icon('app.ico'))
         self.setMinimumSize(1280, 720)
         self.resize(1600, 900)
@@ -717,7 +717,7 @@ class MainWindow(QMainWindow):
     def _on_open_project(self):
         path, _ = QFileDialog.getOpenFileName(
             self, 'Open Project', '',
-            'VideoEditor Project (*.veproj)'
+            'Cadenza Project (*.veproj)'
         )
         if not path:
             return
@@ -763,7 +763,7 @@ class MainWindow(QMainWindow):
     def _on_save_as(self):
         path, _ = QFileDialog.getSaveFileName(
             self, 'Save Project As', '',
-            'VideoEditor Project (*.veproj)'
+            'Cadenza Project (*.veproj)'
         )
         if path:
             if not path.endswith('.veproj'):
@@ -1282,12 +1282,12 @@ class MainWindow(QMainWindow):
     def _update_title(self):
         dirty = ' •' if self.project.is_dirty else ''
         self.setWindowTitle(
-            f'VideoEditor — {self.project.name}{dirty}'
+            f'Cadenza — {self.project.name}{dirty}'
         )
 
     def _on_about(self):
         self.status_label.setText(
-            'VideoEditor v0.1 — built with PySide6 + PyTorch'
+            'Cadenza v1.0 — built with PySide6 + PyTorch'
         )
 
     def closeEvent(self, event):

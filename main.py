@@ -12,8 +12,8 @@ def main():
     )
 
     app = QApplication(sys.argv)
-    app.setApplicationName('VideoEditor')
-    app.setOrganizationName('VideoEditor')
+    app.setApplicationName('Cadenza')
+    app.setOrganizationName('Cadenza')
 
     from ui.mainwindow import MainWindow
     window = MainWindow()

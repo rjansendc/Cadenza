@@ -36,3 +36,9 @@ render_test_NOT_USED
 
 ffmpeg_NOT_USED/*
 ffmpeg_NOT_USED
+
+dist/*
+dist
+
+build/*
+build
