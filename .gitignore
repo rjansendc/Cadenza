@@ -1,0 +1,32 @@
+# IDE
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pycache
+
+# Test media and large files
+test_media/
+*.7z
+*.zip
+
+# Project files (user-specific)
+*.veproj
+
+# Waveform cache
+cache/
+
+# Output files
+output*.mp4
+render_test/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

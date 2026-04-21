@@ -1,0 +1,294 @@
+"""
+Synchronize Clips Dialog — Premiere-style.
+
+User selects clips on timeline, right-clicks → Synchronize.
+Dialog asks only for audio channel.
+Reference is chosen automatically (lowest track number = 
+most likely the dedicated audio recorder).
+"""
+
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QComboBox, QProgressBar, QCheckBox,
+    QTextEdit, QRadioButton, QGroupBox
+)
+from PySide6.QtCore import Qt, QThread, Signal
+
+
+STYLE = """
+    QDialog { background: #1e1e1e; color: #cccccc; }
+    QLabel  { color: #cccccc; font-size: 12px; }
+    QGroupBox {
+        color: #cccccc; font-size: 12px;
+        border: 1px solid #444; border-radius: 4px;
+        margin-top: 8px; padding-top: 8px;
+    }
+    QGroupBox::title {
+        subcontrol-origin: margin;
+        left: 8px; padding: 0 4px;
+    }
+    QRadioButton { color: #cccccc; font-size: 12px; }
+    QRadioButton::indicator {
+        width: 14px; height: 14px;
+        border: 1px solid #666; border-radius: 7px;
+        background: #2a2a2a;
+    }
+    QRadioButton::indicator:checked {
+        background: #4a9de0; border-color: #4a9de0;
+    }
+    QComboBox {
+        background: #2a2a2a; color: #cccccc;
+        border: 1px solid #444; border-radius: 3px;
+        padding: 3px 8px; font-size: 12px;
+        min-width: 60px;
+    }
+    QComboBox QAbstractItemView {
+        background: #2a2a2a; color: #cccccc;
+        selection-background-color: #4a9de0;
+    }
+    QProgressBar {
+        background: #2a2a2a; border: 1px solid #444;
+        border-radius: 3px; height: 14px; text-align: center;
+        font-size: 10px;
+    }
+    QProgressBar::chunk { background: #4a9de0; border-radius: 3px; }
+    QTextEdit {
+        background: #141414; color: #aaa;
+        font-size: 11px; border: 1px solid #333;
+    }
+"""
+
+BTN_PRIMARY = """
+    QPushButton {
+        background: #4a9de0; color: white;
+        border: none; border-radius: 4px;
+        padding: 6px 20px; font-size: 12px; font-weight: 600;
+    }
+    QPushButton:hover   { background: #5aade0; }
+    QPushButton:disabled { background: #333; color: #666; }
+"""
+BTN_CANCEL = """
+    QPushButton {
+        background: #2a2a2a; color: #cccccc;
+        border: 1px solid #444; border-radius: 4px;
+        padding: 6px 20px; font-size: 12px;
+    }
+    QPushButton:hover { background: #3a3a3a; }
+"""
+
+
+class SyncWorker(QThread):
+    progress = Signal(str, int, int)
+    finished = Signal(dict)
+    error    = Signal(str)
+
+    def __init__(self, reference_clip, clips_to_align,
+                 sample_rate, fps, channel, show_plot=False):
+        super().__init__()
+        self.reference_clip = reference_clip
+        self.clips_to_align = clips_to_align
+        self.sample_rate    = sample_rate
+        self.fps            = fps
+        self.channel        = channel  # 0-indexed
+        self.show_plot      = show_plot
+
+    def run(self):
+        try:
+            from sync.sync import sync_clips_to_reference
+            offsets = sync_clips_to_reference(
+                reference_clip=self.reference_clip,
+                clips_to_align=self.clips_to_align,
+                sample_rate=self.sample_rate,
+                fps=self.fps,
+                channel=self.channel,
+                progress_fn=lambda msg, s, t:
+                    self.progress.emit(msg, s, t),
+                show_plot=self.show_plot
+            )
+            self.finished.emit(offsets)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class SyncDialog(QDialog):
+    """Premiere-style Synchronize dialog."""
+
+    def __init__(self, project, sequence,
+                 selected_clip_ids, parent=None):
+        super().__init__(parent)
+        self.project           = project
+        self.sequence          = sequence
+        self.selected_clip_ids = selected_clip_ids
+        self._worker           = None
+        self._offsets          = {}
+        self._reference_clip   = None
+        self._clips_to_align   = []
+
+        self.setWindowTitle("Synchronize Clips")
+        self.setMinimumWidth(360)
+        self.setModal(True)
+        self.setStyleSheet(STYLE)
+
+        self._resolve_clips()
+        self._build_ui()
+
+    def _resolve_clips(self):
+        """
+        From selected clips, pick the reference automatically:
+        lowest track number (most likely dedicated audio recorder).
+        If tie, longest duration wins.
+        Only audio-bearing clips can be used for sync.
+        """
+        audio_clips = [
+            self.project.clips[cid]
+            for cid in self.selected_clip_ids
+            if cid in self.project.clips
+            and self.project.clips[cid].has_audio
+        ]
+        if not audio_clips:
+            return
+
+        # Reference = lowest track, then longest duration
+        audio_clips.sort(
+            key=lambda c: (c.track, -c.duration)
+        )
+        self._reference_clip = audio_clips[0]
+        self._clips_to_align = audio_clips[1:]
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # --- Synchronize by group ---
+        group = QGroupBox("Synchronize Point")
+        group_layout = QVBoxLayout(group)
+        group_layout.setSpacing(6)
+
+        # Greyed-out options (not implemented) — match Premiere look
+        for label in ("Clip Start", "Clip End"):
+            rb = QRadioButton(label)
+            rb.setEnabled(False)
+            rb.setStyleSheet("color: #555;")
+            group_layout.addWidget(rb)
+
+        # Audio track channel — the one we support
+        audio_row = QHBoxLayout()
+        self.audio_rb = QRadioButton("Audio track channel")
+        self.audio_rb.setChecked(True)
+        audio_row.addWidget(self.audio_rb)
+
+        self.channel_combo = QComboBox()
+        self.channel_combo.addItems(["1", "2"])
+        self.channel_combo.setFixedWidth(55)
+        audio_row.addWidget(self.channel_combo)
+        audio_row.addStretch()
+        group_layout.addLayout(audio_row)
+
+        # Show correlation plot checkbox
+        self.plot_cb = QCheckBox("Show correlation plot")
+        self.plot_cb.setChecked(False)
+        group_layout.addWidget(self.plot_cb)
+
+        layout.addWidget(group)
+
+        # --- Clip summary ---
+        if self._reference_clip:
+            n = len(self._clips_to_align)
+            summary = (
+                f"Reference: {self._reference_clip.name}\n"
+                f"Aligning: {n} clip(s)"
+            )
+        else:
+            summary = "No audio clips selected."
+        summary_label = QLabel(summary)
+        summary_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(summary_label)
+
+        # --- Progress (hidden until running) ---
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setVisible(False)
+        self.log.setMaximumHeight(100)
+        layout.addWidget(self.log)
+
+        # --- OK / Cancel ---
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        self.ok_btn = QPushButton("OK")
+        self.ok_btn.setStyleSheet(BTN_PRIMARY)
+        self.ok_btn.setDefault(True)
+        self.ok_btn.setEnabled(bool(self._reference_clip and
+                                    self._clips_to_align))
+        self.ok_btn.clicked.connect(self._on_ok)
+        btn_row.addWidget(self.ok_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet(BTN_CANCEL)
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        layout.addLayout(btn_row)
+
+    def _on_ok(self):
+        self.ok_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(
+            0, len(self._clips_to_align) + 1
+        )
+        self.log.setVisible(True)
+
+        channel = self.channel_combo.currentIndex()  # 0 or 1
+        fps = self.sequence.settings.fps
+        sr  = self.sequence.settings.sample_rate
+
+        self._worker = SyncWorker(
+            self._reference_clip,
+            self._clips_to_align,
+            sr, fps, channel,
+            show_plot=self.plot_cb.isChecked()
+        )
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+        self._worker.start()
+
+    def _on_progress(self, msg, step, total):
+        self.progress_bar.setValue(step)
+        self.log.append(msg)
+
+    def _on_finished(self, offsets):
+        self._offsets = offsets
+        self.progress_bar.setValue(self.progress_bar.maximum())
+
+        if offsets:
+            from sync.sync import apply_sync_offsets
+            apply_sync_offsets(
+                self._reference_clip,
+                self._clips_to_align,
+                offsets,
+                project=self.project
+            )
+            fps = self.sequence.settings.fps
+            for clip_id, frame_offset in offsets.items():
+                clip = self.project.clips.get(clip_id)
+                name = clip.name if clip else clip_id
+                secs = frame_offset / fps
+                self.log.append(
+                    f"{name}: {frame_offset:+d} frames ({secs:+.2f}s)"
+                )
+            self.log.append("\nDone — close to see result.")
+            # Auto-accept so timeline refreshes
+            self.accept()
+        else:
+            self.log.append("No alignment found.")
+            self.ok_btn.setEnabled(True)
+
+    def _on_error(self, msg):
+        self.log.append(f"Error: {msg}")
+        self.ok_btn.setEnabled(True)
