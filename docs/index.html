@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cadenza — GPU-Accelerated Video Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0c;
+    --bg2: #111116;
+    --bg3: #16161d;
+    --gold: #c9a84c;
+    --gold2: #e8c97a;
+    --teal: #2ab87a;
+    --blue: #4a9fd4;
+    --text: #e8e8ec;
+    --muted: #888896;
+    --border: rgba(201,168,76,0.15);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; overflow-x: hidden; }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 1000; opacity: 0.4;
+  }
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    padding: 20px 48px; display: flex; justify-content: space-between; align-items: center;
+    background: linear-gradient(to bottom, rgba(10,10,12,0.95), transparent);
+    backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
+  }
+  .nav-logo { font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; color: var(--gold); letter-spacing: 2px; text-transform: uppercase; }
+  .nav-links { display: flex; gap: 32px; list-style: none; }
+  .nav-links a { color: var(--muted); text-decoration: none; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; transition: color 0.2s; }
+  .nav-links a:hover { color: var(--gold); }
+  .hero {
+    min-height: 100vh; display: flex; flex-direction: column; justify-content: center;
+    align-items: center; text-align: center; padding: 120px 48px 80px; position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 800px; height: 800px; background: radial-gradient(circle, rgba(201,168,76,0.06) 0%, transparent 70%); pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-block; font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--teal); border: 1px solid rgba(42,184,122,0.3); padding: 6px 16px; border-radius: 2px; margin-bottom: 40px;
+    animation: fadeUp 0.8s ease both;
+  }
+  .hero-title { font-family: 'Playfair Display', serif; font-size: clamp(64px, 10vw, 120px); font-weight: 900; line-height: 0.9; letter-spacing: -2px; margin-bottom: 12px; animation: fadeUp 0.8s ease 0.1s both; }
+  .hero-title .gold { color: var(--gold); }
+  .hero-sub { font-family: 'Playfair Display', serif; font-size: clamp(14px, 2vw, 18px); color: var(--muted); font-style: italic; letter-spacing: 4px; margin-bottom: 48px; animation: fadeUp 0.8s ease 0.2s both; }
+  .hero-desc { max-width: 560px; font-size: 16px; line-height: 1.8; color: #aaaabc; margin-bottom: 56px; animation: fadeUp 0.8s ease 0.3s both; }
+  .hero-ctas { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; animation: fadeUp 0.8s ease 0.4s both; }
+  .btn-primary { background: var(--gold); color: #0a0a0c; padding: 14px 36px; font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; text-decoration: none; border-radius: 2px; transition: background 0.2s, transform 0.2s; font-weight: 500; }
+  .btn-primary:hover { background: var(--gold2); transform: translateY(-2px); }
+  .btn-secondary { border: 1px solid var(--border); color: var(--muted); padding: 14px 36px; font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; text-decoration: none; border-radius: 2px; transition: border-color 0.2s, color 0.2s, transform 0.2s; }
+  .btn-secondary:hover { border-color: var(--gold); color: var(--gold); transform: translateY(-2px); }
+  .features { padding: 120px 48px; max-width: 1200px; margin: 0 auto; }
+  .section-label { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 4px; text-transform: uppercase; color: var(--teal); margin-bottom: 16px; }
+  .section-title { font-family: 'Playfair Display', serif; font-size: clamp(36px, 5vw, 56px); font-weight: 700; line-height: 1.1; margin-bottom: 64px; }
+  .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2px; }
+  .feature-card { background: var(--bg2); padding: 40px; border: 1px solid var(--border); transition: border-color 0.3s, background 0.3s; position: relative; overflow: hidden; }
+  .feature-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--gold), transparent); opacity: 0; transition: opacity 0.3s; }
+  .feature-card:hover { background: var(--bg3); border-color: rgba(201,168,76,0.3); }
+  .feature-card:hover::before { opacity: 1; }
+  .feature-icon { font-size: 28px; margin-bottom: 20px; }
+  .feature-name { font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+  .feature-desc { font-size: 14px; line-height: 1.7; color: var(--muted); }
+  .stack { padding: 80px 48px; background: var(--bg2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .stack-inner { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center; }
+  .stack-item { display: flex; align-items: center; justify-content: space-between; padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .stack-name { font-family: 'DM Mono', monospace; font-size: 13px; }
+  .stack-role { font-size: 13px; color: var(--muted); }
+  .stack-highlight { color: var(--gold); }
+  .install { padding: 120px 48px; max-width: 800px; margin: 0 auto; text-align: center; }
+  .code-block { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 32px; text-align: left; margin: 40px 0; }
+  .code-block pre { font-family: 'DM Mono', monospace; font-size: 13px; line-height: 2; color: #aab; }
+  .code-block .comment { color: #555; }
+  .code-block .cmd { color: var(--teal); }
+  .code-block .pkg { color: var(--gold); }
+  footer { padding: 48px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 13px; }
+  .footer-logo { font-family: 'Playfair Display', serif; font-size: 18px; color: var(--gold); font-weight: 700; letter-spacing: 2px; }
+  .footer-links { display: flex; gap: 24px; }
+  .footer-links a { color: var(--muted); text-decoration: none; transition: color 0.2s; }
+  .footer-links a:hover { color: var(--gold); }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+  @media (max-width: 768px) {
+    nav { padding: 16px 24px; } .nav-links { display: none; }
+    .hero { padding: 100px 24px 60px; } .features { padding: 80px 24px; }
+    .stack-inner { grid-template-columns: 1fr; gap: 40px; }
+    footer { flex-direction: column; gap: 24px; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-logo">Cadenza</div>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#stack">Stack</a></li>
+    <li><a href="#install">Install</a></li>
+    <li><a href="https://github.com/rjansendc/Cadenza">GitHub</a></li>
+  </ul>
+</nav>
+
+<section class="hero">
+  <div class="hero-badge">Open Source · Python · GPU Accelerated</div>
+  <h1 class="hero-title"><span class="gold">Ca</span>denza</h1>
+  <p class="hero-sub">A video editor for the stage</p>
+  <p class="hero-desc">
+    A GPU-accelerated video editor built in Python. Designed for multi-camera 
+    concert and performance editing — with automatic audio sync, Lumetri color, 
+    and NVIDIA NVENC hardware export.
+  </p>
+  <div class="hero-ctas">
+    <a href="https://github.com/rjansendc/Cadenza" class="btn-primary">View on GitHub</a>
+    <a href="#install" class="btn-secondary">Quick Install</a>
+  </div>
+</section>
+
+<!-- SCREENSHOT -->
+<div style="padding: 0 48px 100px; max-width: 1200px; margin: 0 auto; animation: fadeUp 0.8s ease 0.5s both;">
+  <div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: 0 40px 120px rgba(0,0,0,0.8);">
+    <div style="background: #1a1a22; padding: 10px 16px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+      <div style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></div>
+      <div style="width:12px;height:12px;border-radius:50%;background:#febc2e"></div>
+      <div style="width:12px;height:12px;border-radius:50%;background:#28c840"></div>
+      <span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);margin-left:8px">Cadenza — Concert Project</span>
+    </div>
+    <img src="screenshot.png" alt="Cadenza screenshot" style="width:100%;display:block;">
+  </div>
+</div>
+
+<section class="features" id="features">
+  <div class="section-label">Capabilities</div>
+  <h2 class="section-title">Built for performance.<br>Ready for the stage.</h2>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">🎵</div>
+      <div class="feature-name">Audio Sync</div>
+      <div class="feature-desc">FFT cross-correlation automatically aligns multi-camera recordings. Eyeball position first, then let the algorithm find the exact frame offset — accurate to within a single frame.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🎨</div>
+      <div class="feature-name">Lumetri Color</div>
+      <div class="feature-desc">Full color grading with temperature, tint, exposure, contrast, highlights, shadows, and saturation. Applied in real-time via GPU compositing.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">⚡</div>
+      <div class="feature-name">NVIDIA NVENC Export</div>
+      <div class="feature-desc">Hardware-accelerated H.264 and H.265 export using NVENC. Exports 4K at ~28fps — roughly 3× faster than software encoding.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🎬</div>
+      <div class="feature-name">Multi-Track Timeline</div>
+      <div class="feature-desc">Unlimited video and audio tracks. Drag, trim, razor cut with link-aware editing. Rubber band selection, multi-clip drag, and full undo/redo.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔊</div>
+      <div class="feature-name">Audio Mixing</div>
+      <div class="feature-desc">Per-clip volume in dB with a Premiere-style logarithmic slider, stereo pan, mute, and waveform display normalized to 0 dBFS.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">💾</div>
+      <div class="feature-name">Project Save / Load</div>
+      <div class="feature-desc">Full serialization of clips, in/out points, effects, envelopes, and track layout. Every razor cut and color grade is preserved.</div>
+    </div>
+  </div>
+</section>
+
+<section class="stack" id="stack">
+  <div class="stack-inner">
+    <div>
+      <div class="section-label">Technology</div>
+      <h2 class="section-title" style="margin-bottom:24px">Python.<br>GPU.<br>Open source.</h2>
+      <p style="color:var(--muted);line-height:1.8;font-size:15px">
+        Built entirely in Python using modern libraries. PyTorch drives the GPU compositor — 
+        every frame is composited on CUDA before being handed to NVENC for encoding. No C++ required.
+      </p>
+    </div>
+    <div>
+      <div class="stack-item"><span class="stack-name">PySide6</span><span class="stack-role">UI framework (Qt6)</span></div>
+      <div class="stack-item"><span class="stack-name stack-highlight">PyTorch + CUDA</span><span class="stack-role">GPU compositing</span></div>
+      <div class="stack-item"><span class="stack-name">PyAV</span><span class="stack-role">Video decode / encode</span></div>
+      <div class="stack-item"><span class="stack-name stack-highlight">NVENC</span><span class="stack-role">Hardware H.264/H.265</span></div>
+      <div class="stack-item"><span class="stack-name">scipy</span><span class="stack-role">FFT audio sync</span></div>
+      <div class="stack-item"><span class="stack-name">numpy</span><span class="stack-role">Audio / waveform processing</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="install" id="install">
+  <div class="section-label">Get Started</div>
+  <h2 class="section-title">Up and running<br>in minutes.</h2>
+  <div class="code-block">
+    <pre><span class="comment"># Create environment</span>
+<span class="cmd">conda create</span> -n cadenza <span class="pkg">python=3.11</span>
+<span class="cmd">conda activate</span> cadenza
+
+<span class="comment"># PyTorch with CUDA (NVIDIA GPU — recommended)</span>
+<span class="cmd">pip install</span> <span class="pkg">torch torchvision</span> --index-url https://download.pytorch.org/whl/cu121
+
+<span class="comment"># PyTorch CPU only (no NVIDIA GPU)</span>
+<span class="cmd">pip install</span> <span class="pkg">torch torchvision</span>
+
+<span class="comment"># Remaining dependencies</span>
+<span class="cmd">pip install</span> <span class="pkg">PySide6 av numpy scipy</span>
+
+<span class="comment"># Clone and run</span>
+<span class="cmd">git clone</span> https://github.com/rjansendc/Cadenza.git
+<span class="cmd">cd</span> Cadenza
+<span class="cmd">python</span> main.py</pre>
+  </div>
+  <p style="color:var(--muted);font-size:14px;line-height:1.8">
+    An NVIDIA GPU is recommended for hardware-accelerated export and compositing.<br>
+    CPU mode works but export will be significantly slower.<br>
+    Tested on Windows 11 with Python 3.11 and CUDA 12.1.
+  </p>
+  <div style="margin-top:48px">
+    <a href="https://github.com/rjansendc/Cadenza" class="btn-primary">View Source on GitHub</a>
+  </div>
+</section>
+
+<footer>
+  <div class="footer-logo">Cadenza</div>
+  <div style="color:var(--muted);font-size:12px">GPU-accelerated video editor · Built with Python</div>
+  <div class="footer-links">
+    <a href="https://github.com/rjansendc/Cadenza">GitHub</a>
+    <a href="https://github.com/rjansendc/Cadenza/blob/main/README.md">Docs</a>
+  </div>
+</footer>
+
+</body>
+</html>

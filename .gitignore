@@ -42,3 +42,5 @@ dist
 
 build/*
 build
+# Debugging screenshots shared during development
+screenshots/
