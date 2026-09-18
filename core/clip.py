@@ -4,6 +4,17 @@ from enum import Enum
 import uuid
 from core.envelope import Envelope
 
+
+def _db_to_linear(db: float) -> float:
+    from effects.audio.volume import db_to_linear
+    return db_to_linear(float(db))
+
+
+def _linear_to_db(linear: float) -> float:
+    from effects.audio.volume import linear_to_db
+    db = linear_to_db(float(linear))
+    return -96.0 if db == float('-inf') else db
+
 class ClipType(Enum):
     VIDEO       = "video"
     AUDIO       = "audio"
@@ -76,12 +87,41 @@ class Clip:
 
     # ── effect parameter keyframes ────────────────────────────
     # Envelopes are keyed "<effect_id>.<param>" (e.g. "motion.scale").
-    # The three original envelopes keep their bare names
-    # ('volume', 'opacity', 'pan') so old projects still load.
+    # Opacity, volume and pan predate that scheme: they keep their bare
+    # names so old projects still load, and they store values in the
+    # units the renderer wants (0-1, linear gain, -1..1) rather than the
+    # units the panel shows (%, dB, -100..100). PARAM_CODECS carries
+    # both facts, so callers can work in panel units throughout.
 
-    @staticmethod
-    def envelope_key(effect_id: str, param: str) -> str:
-        return f"{effect_id}.{param}"
+    PARAM_CODECS = {
+        ('opacity', 'opacity'): (
+            'opacity',
+            lambda v: float(v) / 100.0,      # panel % -> envelope
+            lambda v: float(v) * 100.0,      # envelope -> panel %
+        ),
+        ('pan', 'pan'): (
+            'pan',
+            lambda v: float(v) / 100.0,
+            lambda v: float(v) * 100.0,
+        ),
+        ('volume', 'volume_db'): (
+            'volume',
+            lambda v: _db_to_linear(v),      # panel dB -> linear gain
+            lambda v: _linear_to_db(v),
+        ),
+    }
+
+    @classmethod
+    def _param_codec(cls, effect_id: str, param: str):
+        """(envelope key, to_envelope, from_envelope) for a parameter."""
+        codec = cls.PARAM_CODECS.get((effect_id, param))
+        if codec is not None:
+            return codec
+        return (f"{effect_id}.{param}", float, float)
+
+    @classmethod
+    def envelope_key(cls, effect_id: str, param: str) -> str:
+        return cls._param_codec(effect_id, param)[0]
 
     def is_param_animated(self, effect_id: str,
                            param: str) -> bool:
@@ -101,92 +141,111 @@ class Clip:
     def get_param_at(self, effect_id: str, param: str,
                       frame: int):
         """
-        Parameter value at a clip-local frame: the envelope when
-        keyframed, otherwise the effect's static value.
+        Parameter value at a clip-local frame, in panel units: the
+        envelope when keyframed, otherwise the effect's static value.
         """
-        env = self.envelopes.get(
-            self.envelope_key(effect_id, param))
+        key, _to_env, from_env = self._param_codec(effect_id, param)
+        env = self.envelopes.get(key)
         if env and env.keyframes:
-            return env.value_at(frame)
+            return from_env(env.value_at(frame))
         fx = self.get_effect(effect_id)
         return fx.get(param) if fx else None
 
     def set_param_keyframe(self, effect_id: str, param: str,
                             frame: int, value: float):
-        """Add or move a keyframe, creating the envelope if needed."""
+        """
+        Add or move a keyframe, creating the envelope if needed.
+        `value` is in panel units.
+        """
         from core.envelope import Envelope
-        key = self.envelope_key(effect_id, param)
+        key, to_env, _from_env = self._param_codec(effect_id, param)
         env = self.envelopes.get(key)
         if env is None:
             fx = self.get_effect(effect_id)
             static = fx.get(param) if fx else value
             env = Envelope(
                 param=key,
-                default_value=(
-                    float(static) if static is not None
-                    else float(value)
-                ),
+                default_value=to_env(
+                    static if static is not None else value),
             )
             self.envelopes[key] = env
-        env.add_keyframe(frame, float(value))
+        env.add_keyframe(frame, to_env(value))
 
     def remove_param_keyframe(self, effect_id: str, param: str,
                                frame: int):
         """
         Remove one keyframe. When the last one goes, drop the
-        envelope so the static value takes over again.
+        envelope so the static value takes over again — except for
+        opacity/volume/pan, whose flat envelope IS the static value.
         """
-        key = self.envelope_key(effect_id, param)
+        key, _to_env, _from_env = self._param_codec(effect_id, param)
         env = self.envelopes.get(key)
         if env is None:
             return
         env.remove_keyframe(frame)
-        if not env.keyframes:
+        if not env.keyframes and '.' in key:
             del self.envelopes[key]
 
-    def keyframe_frames(self, effect_id: str = 'motion') -> list:
-        """Every frame carrying a keyframe for this effect, sorted."""
+    def _envelope_keys(self, effect_id=None) -> list:
+        """Envelope keys belonging to an effect, or all of them."""
+        if effect_id is None:
+            return list(self.envelopes.keys())
         prefix = f"{effect_id}."
+        legacy = {k for (eid, _p), (k, _t, _f)
+                  in self.PARAM_CODECS.items() if eid == effect_id}
+        return [k for k in self.envelopes
+                if k.startswith(prefix) or k in legacy]
+
+    def keyframe_frames(self, effect_id=None) -> list:
+        """
+        Every frame carrying a keyframe, sorted.
+        effect_id=None covers every parameter on the clip.
+        """
         frames = set()
-        for key, env in self.envelopes.items():
-            if not key.startswith(prefix):
-                continue
+        for key in self._envelope_keys(effect_id):
+            env = self.envelopes.get(key)
             for kf in getattr(env, 'keyframes', []):
                 frames.add(kf.frame)
         return sorted(frames)
 
     def move_keyframes(self, from_frame: int, to_frame: int,
-                        effect_id: str = 'motion') -> dict:
+                        effect_id=None) -> dict:
         """
-        Retime every keyframe of this effect that sits on from_frame.
+        Retime every keyframe that sits on from_frame.
 
         Timeline markers stand for a frame, not a single parameter, so
-        dragging one moves all the parameters keyframed there together.
-        Returns {param: value} for any keyframes overwritten at the
-        destination, so undo can put them back.
+        dragging one moves everything keyframed there together.
+        Returns {envelope_key: value} for any keyframes overwritten at
+        the destination, so undo can put them back.
         """
         if from_frame == to_frame:
             return {}
 
-        prefix = f"{effect_id}."
         moving = {}
         overwritten = {}
-
-        for key, env in self.envelopes.items():
-            if not key.startswith(prefix):
+        for key in self._envelope_keys(effect_id):
+            env = self.envelopes.get(key)
+            if env is None:
                 continue
-            param = key[len(prefix):]
             for kf in list(env.keyframes):
                 if kf.frame == from_frame:
-                    moving[param] = kf.value
+                    moving[key] = kf.value
                 elif kf.frame == to_frame:
-                    overwritten[param] = kf.value
+                    overwritten[key] = kf.value
 
-        for param, value in moving.items():
-            self.remove_param_keyframe(effect_id, param, from_frame)
-            self.set_param_keyframe(effect_id, param, to_frame, value)
+        for key, value in moving.items():
+            env = self.envelopes[key]
+            env.remove_keyframe(from_frame)
+            env.add_keyframe(to_frame, value)
 
         return overwritten
+
+    def restore_envelope_keyframes(self, frame: int, values: dict):
+        """Put keyframes back exactly as they were (undo helper)."""
+        for key, value in (values or {}).items():
+            env = self.envelopes.get(key)
+            if env is not None:
+                env.add_keyframe(frame, value)
 
     def get_volume_at(self, frame: int) -> float:
         """Volume at a specific frame."""

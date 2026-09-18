@@ -192,7 +192,7 @@ def test_move_onto_another_keyframe_reports_what_it_replaced():
 
     overwritten = clip.move_keyframes(5, 30, 'motion')
 
-    assert overwritten == {'scale': 180.0}
+    assert overwritten == {'motion.scale': 180.0}
     assert clip.keyframe_frames('motion') == [30]
     assert clip.get_param_at('motion', 'scale', 30) == 120.0
 
@@ -229,3 +229,74 @@ def test_push_can_record_a_change_already_made():
 
     stack.undo()
     assert clip.keyframe_frames('motion') == [5]
+
+
+# ── opacity / volume / pan keyframes (envelope units differ) ──────
+
+def test_opacity_keyframes_convert_percent_to_envelope_units():
+    clip = make_clip()
+    clip.set_param_keyframe('opacity', 'opacity', 0, 100.0)
+    clip.set_param_keyframe('opacity', 'opacity', 10, 0.0)
+
+    # panel units coming back out
+    assert clip.get_param_at('opacity', 'opacity', 5) == 50.0
+    # renderer units going in
+    assert clip.get_opacity_at(0) == 1.0
+    assert clip.get_opacity_at(5) == 0.5
+    assert clip.get_opacity_at(10) == 0.0
+
+
+def test_volume_keyframes_convert_db_to_linear():
+    from effects.audio.volume import db_to_linear
+    clip = make_clip(has_audio=True)
+    clip.set_param_keyframe('volume', 'volume_db', 0, 0.0)
+    clip.set_param_keyframe('volume', 'volume_db', 10, -6.0)
+
+    assert clip.get_volume_at(0) == 1.0
+    assert abs(clip.get_volume_at(10) - db_to_linear(-6.0)) < 1e-9
+    assert abs(clip.get_param_at('volume', 'volume_db', 10) + 6.0) < 1e-9
+
+
+def test_pan_keyframes_convert_percent_to_unit_range():
+    clip = make_clip(has_audio=True)
+    clip.set_param_keyframe('pan', 'pan', 0, -100.0)
+    clip.set_param_keyframe('pan', 'pan', 10, 100.0)
+
+    r = ClipRenderer(clip)
+    assert r.get_pan_at(0) == -1.0
+    assert r.get_pan_at(5) == 0.0
+    assert clip.get_param_at('pan', 'pan', 10) == 100.0
+
+
+def test_removing_a_legacy_keyframe_keeps_its_flat_envelope():
+    clip = make_clip()
+    clip.set_param_keyframe('opacity', 'opacity', 4, 50.0)
+    clip.remove_param_keyframe('opacity', 'opacity', 4)
+
+    # the envelope carries the clip's flat opacity, so it must survive
+    assert 'opacity' in clip.envelopes
+    assert not clip.is_param_animated('opacity', 'opacity')
+    assert clip.get_opacity_at(4) == 1.0
+
+
+def test_markers_cover_every_parameter():
+    clip = make_clip(has_audio=True)
+    clip.set_param_keyframe('motion', 'scale', 5, 120.0)
+    clip.set_param_keyframe('opacity', 'opacity', 30, 0.0)
+    clip.set_param_keyframe('volume', 'volume_db', 30, -6.0)
+
+    assert clip.keyframe_frames() == [5, 30]
+    assert clip.keyframe_frames('motion') == [5]
+    assert clip.keyframe_frames('opacity') == [30]
+
+
+def test_dragging_a_marker_moves_mixed_parameters_together():
+    clip = make_clip(has_audio=True)
+    clip.set_param_keyframe('motion', 'scale', 12, 150.0)
+    clip.set_param_keyframe('opacity', 'opacity', 12, 25.0)
+
+    clip.move_keyframes(12, 40)
+
+    assert clip.keyframe_frames() == [40]
+    assert clip.get_param_at('motion', 'scale', 40) == 150.0
+    assert clip.get_param_at('opacity', 'opacity', 40) == 25.0

@@ -40,13 +40,15 @@ class ParameterWidget(QWidget):
         self._updating = False  # Prevent recursion
         self._slider   = None   # optional slider for dB params
 
-        # Keyframable parameters: motion's numeric ones for now.
-        # volume/opacity/pan already have their own envelopes in
-        # different units, so they stay on the old path.
+        # Keyframable: motion's numeric parameters, plus the three
+        # that predate the system (opacity, volume, pan). Clip's
+        # PARAM_CODECS converts those to and from their envelope units.
+        from core.clip import Clip
         self.animatable = (
             clip is not None
-            and effect.id == 'motion'
             and param_def.param_type == ParamType.FLOAT
+            and (effect.id == 'motion'
+                 or (effect.id, param_def.name) in Clip.PARAM_CODECS)
         )
 
         has_slider = (param_def.unit == 'dB')
@@ -1039,7 +1041,12 @@ class EffectsPanel(QWidget):
 
         clip = self.current_clip
         if clip is not None:
-            if effect_id == 'opacity' and param_name == 'opacity':
+            if clip.is_param_animated(effect_id, param_name):
+                # ParameterWidget wrote the keyframe and pushed its own
+                # command; writing the static value too would be ignored
+                # at best and fight the envelope at worst
+                pass
+            elif effect_id == 'opacity' and param_name == 'opacity':
                 old = clip.get_opacity_at(0)
                 clip.set_opacity(float(value) / 100.0)
                 undo_stack.push(SetOpacityCommand(
@@ -1067,9 +1074,6 @@ class EffectsPanel(QWidget):
                 undo_stack.push(SetEffectParamCommand(
                     clip, 'pan', 'pan', old_val, float(value) / 100.0
                 ))
-            elif clip.is_param_animated(effect_id, param_name):
-                # ParameterWidget pushed a SetKeyframeCommand already
-                pass
             else:
                 # Generic effect param (scale, rotation, position, etc.)
                 fx = clip.get_effect(effect_id)

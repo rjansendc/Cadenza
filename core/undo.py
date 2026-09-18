@@ -366,12 +366,11 @@ class SetKeyframeCommand(UndoCommand):
 class MoveKeyframesCommand(UndoCommand):
     """Retime every keyframe sitting on one frame (a timeline marker)."""
 
-    def __init__(self, clip, effect_id: str,
-                 from_frame: int, to_frame: int,
-                 overwritten: dict):
+    def __init__(self, clip, effect_id, from_frame: int,
+                 to_frame: int, overwritten: dict):
         super().__init__("Move keyframe")
         self.clip        = clip
-        self.effect_id   = effect_id
+        self.effect_id   = effect_id   # None = every parameter
         self.from_frame  = from_frame
         self.to_frame    = to_frame
         self.overwritten = dict(overwritten or {})
@@ -384,9 +383,8 @@ class MoveKeyframesCommand(UndoCommand):
         self.clip.move_keyframes(
             self.to_frame, self.from_frame, self.effect_id)
         # restore whatever the move landed on top of
-        for param, value in self.overwritten.items():
-            self.clip.set_param_keyframe(
-                self.effect_id, param, self.to_frame, value)
+        self.clip.restore_envelope_keyframes(
+            self.to_frame, self.overwritten)
 
 
 class RemoveKeyframeCommand(UndoCommand):

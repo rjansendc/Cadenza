@@ -269,7 +269,7 @@ class ClipItem(QGraphicsRectItem):
         # opacity envelope line — video clips only
         if self.clip.has_video:
             self._draw_opacity_envelope(painter, rect)
-            self._draw_keyframe_markers(painter, rect)
+        self._draw_keyframe_markers(painter, rect)
 
     # =========================================================
     # Effect keyframes
@@ -291,8 +291,6 @@ class ClipItem(QGraphicsRectItem):
 
     def _keyframe_at_pos(self, pos):
         """Local frame of the marker under the cursor, or None."""
-        if not self.clip.has_video:
-            return None
         rect = self.rect()
         if rect.width() < 20:
             return None
@@ -300,7 +298,7 @@ class ClipItem(QGraphicsRectItem):
         if abs(pos.y() - y) > self.KF_HALF_H + 3:
             return None
         best, best_dx = None, self.KF_GRAB
-        for f in self.clip.keyframe_frames('motion'):
+        for f in self.clip.keyframe_frames():
             dx = abs(pos.x() - self._keyframe_marker_x(rect, f))
             if dx <= best_dx:
                 best, best_dx = f, dx
@@ -326,7 +324,7 @@ class ClipItem(QGraphicsRectItem):
         if rect.width() < 20:
             return
 
-        frames = [f for f in self.clip.keyframe_frames('motion')
+        frames = [f for f in self.clip.keyframe_frames()
                   if 0 <= f <= duration]
         if not frames:
             return
@@ -796,7 +794,7 @@ class ClipItem(QGraphicsRectItem):
             target = self._frame_at_x(event.pos().x())
             if target != self._kf_drag_frame:
                 hit = self.clip.move_keyframes(
-                    self._kf_drag_frame, target, 'motion')
+                    self._kf_drag_frame, target)
                 # keep the first set we displaced; later moves in the
                 # same drag would otherwise overwrite the record
                 for param, value in hit.items():
@@ -1210,7 +1208,7 @@ class ClipItem(QGraphicsRectItem):
             if end != start:
                 from core.undo import undo_stack, MoveKeyframesCommand
                 cmd = MoveKeyframesCommand(
-                    self.clip, 'motion', start, end, overwritten)
+                    self.clip, None, start, end, overwritten)
                 # the move already happened during the drag
                 undo_stack.push(cmd, execute=False)
                 self.app_state.clip_modified.emit(self.clip.id)
