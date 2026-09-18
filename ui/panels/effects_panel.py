@@ -53,7 +53,7 @@ class ParameterWidget(QWidget):
         self.setFixedHeight(50 if has_slider else 30)
         self._build_ui()
         self._update_from_effect()
-        self._on_playhead_moved()
+        self._on_playhead_moved(force=True)
         
     def _build_ui(self):
         from PySide6.QtWidgets import QSlider
@@ -449,43 +449,66 @@ class ParameterWidget(QWidget):
         self._update_keyframe_button()
         self.value_changed.emit(name, self.effect.get(name))
 
+    _KF_STYLES = {
+        "#4a9de0": ("QPushButton { background: transparent; border: none;"
+                    " font-size: 10px; color: #4a9de0; }"
+                    " QPushButton:hover { color: #ffffff; }"),
+        "#666666": ("QPushButton { background: transparent; border: none;"
+                    " font-size: 10px; color: #666666; }"
+                    " QPushButton:hover { color: #ffffff; }"),
+    }
+
     def _update_keyframe_button(self):
-        """◆ keyframe here · ◇ animated elsewhere · ◊ not animated."""
+        """
+        ◆ keyframe here · ◇ animated elsewhere · ◊ not animated.
+
+        Only touches the widget when the state actually changes:
+        this runs for every row on every playhead tick, and
+        re-applying a stylesheet each frame stalls playback.
+        """
         if not self.animatable:
             return
         name  = self.param_def.name
         frame = self.current_local_frame()
         if self.clip.has_keyframe_at(self.effect.id, name, frame):
-            self.keyframe_btn.setText("◆")
-            self.keyframe_btn.setToolTip("Remove keyframe here")
-            colour = "#4a9de0"
+            state = ("◆", "#4a9de0", "Remove keyframe here")
         elif self.is_animated():
-            self.keyframe_btn.setText("◇")
-            self.keyframe_btn.setToolTip("Add keyframe here")
-            colour = "#4a9de0"
+            state = ("◇", "#4a9de0", "Add keyframe here")
         else:
-            self.keyframe_btn.setText("◊")
-            self.keyframe_btn.setToolTip("Add keyframe here")
-            colour = "#666666"
-        self.keyframe_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: none;"
-            f" font-size: 10px; color: {colour}; }}"
-            " QPushButton:hover { color: #ffffff; }"
-        )
+            state = ("◊", "#666666", "Add keyframe here")
 
-    def _on_playhead_moved(self, _frame=None):
-        """Follow the animated value as the playhead moves."""
+        if state == getattr(self, '_kf_state', None):
+            return
+        self._kf_state = state
+
+        text, colour, tip = state
+        self.keyframe_btn.setText(text)
+        self.keyframe_btn.setToolTip(tip)
+        self.keyframe_btn.setStyleSheet(self._KF_STYLES[colour])
+
+    def _on_playhead_moved(self, _frame=None, force=False):
+        """
+        Follow the animated value as the playhead moves.
+
+        Called for every row on every frame during playback, so it
+        must do nothing at all in the common case.
+        """
+        if not self.animatable:
+            return
+        if not force and not self.isVisible():
+            return
         if self.is_animated():
-            self._updating = True
-            try:
-                value = self.clip.get_param_at(
-                    self.effect.id, self.param_def.name,
-                    self.current_local_frame())
-                if value is not None and isinstance(
-                        self.input_widget, (QDoubleSpinBox, QSpinBox)):
+            value = self.clip.get_param_at(
+                self.effect.id, self.param_def.name,
+                self.current_local_frame())
+            if (value is not None and isinstance(
+                    self.input_widget, (QDoubleSpinBox, QSpinBox))
+                    and abs(self.input_widget.value() - value) > 0.005):
+                self._updating = True
+                try:
                     self.input_widget.setValue(value)
-            finally:
-                self._updating = False
+                finally:
+                    self._updating = False
         self._update_keyframe_button()
 
     def _on_value_changed(self, value):
