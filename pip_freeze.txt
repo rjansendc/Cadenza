@@ -1,0 +1,60 @@
+altgraph==0.17.5
+audalign==1.3.1
+av==17.0.0
+brotlicffi @ file:///C:/miniconda3/conda-bld/brotlicffi_1764961370587/work
+certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1772001073725/work/certifi
+cffi @ file:///C:/miniconda3/conda-bld/cffi_1761832792265/work
+charset-normalizer @ file:///C:/miniconda3/conda-bld/charset-normalizer_1761745005832/work
+colorama==0.4.6
+contourpy==1.3.3
+cycler==0.12.1
+decord==0.6.0
+filelock @ file:///C:/Users/task_176943975530691/croot/filelock_1769440571783/work
+fonttools==4.62.1
+fsspec==2026.3.0
+gmpy2 @ file:///C:/miniconda3/conda-bld/gmpy2_1764748103115/work
+idna @ file:///C:/miniconda3/conda-bld/idna_1761912044050/work
+iniconfig==2.3.0
+Jinja2 @ file:///C:/b/abs_920kup4e6u/croot/jinja2_1741711580669/work
+kiwisolver==1.5.0
+MarkupSafe @ file:///C:/b/abs_a0ma7ge0jc/croot/markupsafe_1738584052792/work
+matplotlib==3.8.2
+mkl-service==2.4.0
+mkl_fft @ file:///C:/Users/dev-admin/mkl/mkl_fft_1730823082242/work
+mkl_random @ file:///C:/Users/dev-admin/mkl/mkl_random_1730822522280/work
+mpmath @ file:///C:/b/abs_7833jrbiox/croot/mpmath_1690848321154/work
+networkx @ file:///C:/miniconda3/conda-bld/networkx_1765378660274/work
+numpy==1.26.4
+opencv-python==4.13.0.92
+packaging==26.0
+pefile==2024.8.26
+pillow @ file:///C:/b/abs_b50vowcrzo/croot/pillow_1738010273782/work
+pluggy==1.6.0
+pycparser @ file:///C:/Users/task_177495971060608/croot/pycparser_1774959807716/work
+pydub==0.25.1
+Pygments==2.20.0
+pyinstaller==6.19.0
+pyinstaller-hooks-contrib==2026.4
+pyparsing==3.3.2
+PySide6==6.11.0
+PySide6_Addons==6.11.0
+PySide6_Essentials==6.11.0
+PySocks @ file:///C:/miniconda3/conda-bld/pysocks_1761753028158/work
+pytest==9.0.3
+pytest-qt==4.5.0
+python-dateutil==2.9.0.post0
+pywin32-ctypes==0.2.3
+PyYAML @ file:///C:/miniconda3/conda-bld/pyyaml_1763465512847/work
+requests @ file:///C:/Users/task_177506609072086/croot/requests_1775066161205/work
+scipy==1.12.0
+shiboken6==6.11.0
+six==1.17.0
+sounddevice==0.5.5
+sympy==1.13.1
+torch==2.5.1
+torchaudio==2.5.1
+torchvision==0.20.1
+tqdm==4.66.2
+typing_extensions @ file:///C:/b/abs_ecq8gc0vbm/croot/typing_extensions_1756281142218/work
+urllib3 @ file:///C:/Users/task_176781036847582/croot/urllib3_1767810492638/work
+win_inet_pton @ file:///C:/miniconda3/conda-bld/win_inet_pton_1761746278197/work

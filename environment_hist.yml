@@ -1,0 +1,11 @@
+name: videoeditor
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch-cuda=12.1
+  - torchaudio
+  - pytorch
+  - torchvision
+  - openssl=3.5.6
+prefix: C:\Projects\miniconda3\envs\videoeditor

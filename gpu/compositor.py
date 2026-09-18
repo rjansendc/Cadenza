@@ -239,13 +239,60 @@ class Compositor:
         Fast path: if centered and no rotation,
         just interpolate directly to canvas size.
         """
-        scale    = (motion.get('scale') or 100.0) / 100.0
+        # 'scale' drives both axes while Uniform Scale is on.
+        # With it off, 'scale' is height only and 'scale_x'
+        # (Scale Width) stretches/squeezes the width on its own.
+        scale_h  = (motion.get('scale') or 100.0) / 100.0
         pos_x    = motion.get('position_x') or 960.0
         pos_y    = motion.get('position_y') or 540.0
         rotation = motion.get('rotation') or 0.0
 
-        if scale <= 0:
-            scale = 0.01
+        uniform  = motion.get('uniform_scale')
+        if uniform is None:
+            uniform = True
+        scale_w  = (
+            scale_h if uniform
+            else (motion.get('scale_x') or 100.0) / 100.0
+        )
+
+        if scale_h <= 0:
+            scale_h = 0.01
+        if scale_w <= 0:
+            scale_w = 0.01
+
+        # --- CROP (percent of source, per edge) ---
+        # Trim the source first, then keep the remaining picture where
+        # it was: the cropped edge goes empty instead of the image
+        # jumping across the frame.
+        crop_l = max(0.0, min(100.0, motion.get('crop_left')   or 0.0)) / 100.0
+        crop_r = max(0.0, min(100.0, motion.get('crop_right')  or 0.0)) / 100.0
+        crop_t = max(0.0, min(100.0, motion.get('crop_top')    or 0.0)) / 100.0
+        crop_b = max(0.0, min(100.0, motion.get('crop_bottom') or 0.0)) / 100.0
+        has_crop = (crop_l or crop_r or crop_t or crop_b)
+
+        crop_off_x = 0.0
+        crop_off_y = 0.0
+        if has_crop:
+            h_src = frame.shape[0]
+            w_src = frame.shape[1]
+
+            x1 = int(w_src * crop_l)
+            x2 = w_src - int(w_src * crop_r)
+            y1 = int(h_src * crop_t)
+            y2 = h_src - int(h_src * crop_b)
+
+            # opposing crops can meet - always leave one pixel
+            x1 = max(0, min(x1, w_src - 1))
+            x2 = max(x1 + 1, min(x2, w_src))
+            y1 = max(0, min(y1, h_src - 1))
+            y2 = max(y1 + 1, min(y2, h_src))
+
+            # how far the kept region's centre sits from the source
+            # centre, in source pixels - used to hold it in place
+            crop_off_x = (x1 + x2) / 2.0 - w_src / 2.0
+            crop_off_y = (y1 + y2) / 2.0 - h_src / 2.0
+
+            frame = frame[y1:y2, x1:x2, :]
 
         t = frame.permute(2, 0, 1).unsqueeze(0) / 255.0
 
@@ -258,7 +305,20 @@ class Compositor:
             abs(pos_x - cx_target) < 2 and
             abs(pos_y - cy_target) < 2
         )
-        if is_centered and abs(rotation) < 0.01 and abs(scale - 1.0) < 0.001:
+        no_scaling = (
+            abs(scale_h - 1.0) < 0.001 and
+            abs(scale_w - 1.0) < 0.001
+        )
+        # Only when the source already matches the canvas: this path
+        # resizes straight to canvas size, which would stretch a source
+        # of a different shape (a 4:3 clip in a 16:9 sequence) instead
+        # of pillarboxing it.
+        same_size = (
+            frame.shape[0] == self.height and
+            frame.shape[1] == self.width
+        )
+        if (is_centered and abs(rotation) < 0.01
+                and no_scaling and not has_crop and same_size):
             # True fast path: centered, no rotation, no scale change
             # — just resize source to canvas directly
             t = F.interpolate(
@@ -272,8 +332,8 @@ class Compositor:
         # --- FULL PATH — offset/rotated clips ---
         src_h = frame.shape[0]
         src_w = frame.shape[1]
-        new_h = max(1, int(src_h * scale))
-        new_w = max(1, int(src_w * scale))
+        new_h = max(1, int(src_h * scale_h))
+        new_w = max(1, int(src_w * scale_w))
 
         t = F.interpolate(
             t, size=(new_h, new_w),
@@ -310,8 +370,8 @@ class Compositor:
             dtype=torch.float32, device='cuda'
         )
 
-        cx = int(pos_x)
-        cy = int(pos_y)
+        cx = int(round(pos_x + crop_off_x * scale_w))
+        cy = int(round(pos_y + crop_off_y * scale_h))
         x1 = cx - new_w // 2
         y1 = cy - new_h // 2
         x2 = x1 + new_w

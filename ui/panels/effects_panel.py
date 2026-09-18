@@ -101,13 +101,16 @@ class ParameterWidget(QWidget):
         
         # Parameter label
         label = QLabel(self.param_def.label)
-        label.setFixedWidth(80)
+        label.setFixedWidth(100)   # fits the longest label, 'Anti-flicker Filter'
         label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         label.setStyleSheet("""
             QLabel {
                 color: #cccccc;
                 font-size: 11px;
                 font-weight: 500;
+            }
+            QLabel:disabled {
+                color: #666666;
             }
         """)
         layout.addWidget(label)
@@ -133,6 +136,11 @@ class ParameterWidget(QWidget):
                 }
                 QPushButton:hover { background: #4a4a4a; color: #ffffff; }
                 QPushButton:pressed { background: #4a9de0; color: #ffffff; }
+                QPushButton:disabled {
+                    background: #262626;
+                    color: #555555;
+                    border-color: #333333;
+                }
             """
             up_btn = QPushButton("▲")
             up_btn.setStyleSheet(btn_style)
@@ -159,6 +167,9 @@ class ParameterWidget(QWidget):
                 QLabel {
                     color: #888888;
                     font-size: 10px;
+                }
+                QLabel:disabled {
+                    color: #555555;
                 }
             """)
             layout.addWidget(unit_label)
@@ -265,6 +276,11 @@ class ParameterWidget(QWidget):
             }
             QDoubleSpinBox:hover, QSpinBox:hover {
                 background: #333333;
+            }
+            QDoubleSpinBox:disabled, QSpinBox:disabled {
+                background: #262626;
+                color: #666666;
+                border-color: #333333;
             }
             QDoubleSpinBox::up-button, QSpinBox::up-button { width: 0; }
             QDoubleSpinBox::down-button, QSpinBox::down-button { width: 0; }
@@ -516,10 +532,6 @@ class EffectSectionWidget(QWidget):
         param_defs = self.effect.param_defs()
         
         for param_def in param_defs:
-            # Skip crop parameters for now (grayed out as requested)
-            if 'crop' in param_def.name.lower():
-                continue
-                
             # Create separator if needed
             if param_def.separator_before:
                 separator = QFrame()
@@ -541,7 +553,41 @@ class EffectSectionWidget(QWidget):
             )
             self.parameter_widgets.append(param_widget)
             self.params_layout.addWidget(param_widget)
-    
+
+        self._link_uniform_scale()
+
+    def _link_uniform_scale(self):
+        """
+        Scale Width only applies while Uniform Scale is off
+        (then Scale is height and Scale Width is width).
+        Grey it out while Uniform Scale is ticked, as Premiere does.
+        """
+        rows = {w.param_def.name: w for w in self.parameter_widgets}
+        uniform_row = rows.get('uniform_scale')
+        width_row   = rows.get('scale_x')
+        if uniform_row is None or width_row is None:
+            return
+
+        def _sync(_name=None, _value=None):
+            is_uniform = bool(self.effect.get('uniform_scale'))
+
+            # Uniform Scale ignores scale_x, so a stale 150 would sit
+            # there reading as if the clip were still stretched.
+            if is_uniform and self.effect.get('scale_x') != 100.0:
+                self.effect.set('scale_x', 100.0)
+                width_row._update_from_effect()
+                width_row.value_changed.emit('scale_x', 100.0)
+
+            width_row.setEnabled(not is_uniform)
+            width_row.setToolTip(
+                "Turn off Uniform Scale to set width separately"
+                if is_uniform else ""
+            )
+
+        uniform_row.value_changed.connect(_sync)
+        self._sync_uniform_scale = _sync   # keep a reference alive
+        _sync()
+
     def _toggle_expand(self):
         """Toggle expand/collapse state."""
         self.expanded = not self.expanded
@@ -577,7 +623,7 @@ class EffectsPanel(QWidget):
         self._connect_signals()
         
     def _build_ui(self):
-        self.setMinimumWidth(280)
+        self.setMinimumWidth(300)  # label 100 + spinbox + step/unit/keyframe columns
         self.setStyleSheet("""
             EffectsPanel {
                 background-color: #1a1a1a;
