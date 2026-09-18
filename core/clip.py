@@ -240,12 +240,40 @@ class Clip:
 
         return overwritten
 
+    def remove_keyframes_at(self, frame: int,
+                             effect_id=None) -> dict:
+        """
+        Delete every keyframe on a frame — what a timeline marker
+        stands for. Returns {envelope_key: value} so undo can restore.
+        """
+        removed = {}
+        for key in self._envelope_keys(effect_id):
+            env = self.envelopes.get(key)
+            if env is None:
+                continue
+            for kf in list(env.keyframes):
+                if kf.frame == frame:
+                    removed[key] = kf.value
+                    env.remove_keyframe(frame)
+            # a motion envelope with no keyframes left is dead weight;
+            # opacity/volume/pan keep theirs as the flat value
+            if not env.keyframes and '.' in key:
+                del self.envelopes[key]
+        return removed
+
     def restore_envelope_keyframes(self, frame: int, values: dict):
-        """Put keyframes back exactly as they were (undo helper)."""
+        """
+        Put keyframes back exactly as they were (undo helper),
+        recreating any envelope that was dropped when its last
+        keyframe went.
+        """
+        from core.envelope import Envelope
         for key, value in (values or {}).items():
             env = self.envelopes.get(key)
-            if env is not None:
-                env.add_keyframe(frame, value)
+            if env is None:
+                env = Envelope(param=key, default_value=float(value))
+                self.envelopes[key] = env
+            env.add_keyframe(frame, value)
 
     def get_volume_at(self, frame: int) -> float:
         """Volume at a specific frame."""

@@ -363,6 +363,26 @@ class SetKeyframeCommand(UndoCommand):
         return False
 
 
+class DeleteKeyframesCommand(UndoCommand):
+    """Delete every keyframe on one frame (a timeline marker)."""
+
+    def __init__(self, clip, frame: int, effect_id=None,
+                 removed: dict = None):
+        super().__init__("Delete keyframe")
+        self.clip      = clip
+        self.frame     = frame
+        self.effect_id = effect_id     # None = every parameter
+        self.removed   = dict(removed or {})
+
+    def redo(self):
+        self.removed = self.clip.remove_keyframes_at(
+            self.frame, self.effect_id)
+
+    def undo(self):
+        self.clip.restore_envelope_keyframes(
+            self.frame, self.removed)
+
+
 class MoveKeyframesCommand(UndoCommand):
     """Retime every keyframe sitting on one frame (a timeline marker)."""
 

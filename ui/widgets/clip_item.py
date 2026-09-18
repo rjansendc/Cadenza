@@ -313,6 +313,45 @@ class ClipItem(QGraphicsRectItem):
         frame = round((x - rect.left()) / rect.width() * duration)
         return int(max(0, min(duration, frame)))
 
+    def _keyframe_menu(self, event, frame: int):
+        """Small menu for one marker."""
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtCore import QPoint
+
+        menu = QMenu()
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2a2a2a;
+                color: #cccccc;
+                border: 1px solid #444444;
+            }
+            QMenu::item:selected { background-color: #3a6a9a; }
+        """)
+        act_delete = menu.addAction('Delete Keyframe')
+        act_clear  = menu.addAction('Delete All Keyframes on Clip')
+
+        sp = event.screenPos()
+        action = menu.exec(QPoint(int(sp.x()), int(sp.y())))
+        if action == act_delete:
+            self._delete_keyframes_at(frame)
+        elif action == act_clear:
+            from core.undo import undo_stack, CompoundCommand
+            frames = self.clip.keyframe_frames()
+            if frames:
+                with undo_stack.compound('Delete all keyframes'):
+                    for f in frames:
+                        self._delete_keyframes_at(f, refresh=False)
+                self.update()
+                self.app_state.clip_modified.emit(self.clip.id)
+
+    def _delete_keyframes_at(self, frame: int, refresh: bool = True):
+        """Remove every keyframe on a frame, undoably."""
+        from core.undo import undo_stack, DeleteKeyframesCommand
+        undo_stack.push(DeleteKeyframesCommand(self.clip, frame))
+        if refresh:
+            self.update()
+            self.app_state.clip_modified.emit(self.clip.id)
+
     def _draw_keyframe_markers(self, painter, rect):
         """
         Small diamonds along the bottom of the clip, one per frame
@@ -413,6 +452,14 @@ class ClipItem(QGraphicsRectItem):
     def contextMenuEvent(self, event):
         """Right-click context menu."""
         from PySide6.QtWidgets import QMenu
+
+        # right-clicking a keyframe marker is about the keyframe,
+        # not the clip
+        kf = self._keyframe_at_pos(event.pos())
+        if kf is not None:
+            self._keyframe_menu(event, kf)
+            return
+
         menu = QMenu()
         menu.setStyleSheet("""
             QMenu {
@@ -690,6 +737,10 @@ class ClipItem(QGraphicsRectItem):
                 event.button() == Qt.MouseButton.LeftButton):
             kf = self._keyframe_at_pos(event.pos())
             if kf is not None:
+                if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                    self._delete_keyframes_at(kf)
+                    event.accept()
+                    return
                 self._kf_drag_frame  = kf
                 self._kf_drag_orig   = kf
                 self._kf_overwritten = {}

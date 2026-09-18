@@ -300,3 +300,59 @@ def test_dragging_a_marker_moves_mixed_parameters_together():
     assert clip.keyframe_frames() == [40]
     assert clip.get_param_at('motion', 'scale', 40) == 150.0
     assert clip.get_param_at('opacity', 'opacity', 40) == 25.0
+
+
+# ── deleting keyframes ────────────────────────────────────────────
+
+def test_remove_keyframes_at_clears_every_param_on_that_frame():
+    clip = make_clip(has_audio=True)
+    clip.set_param_keyframe('motion', 'scale', 8, 130.0)
+    clip.set_param_keyframe('opacity', 'opacity', 8, 50.0)
+    clip.set_param_keyframe('motion', 'scale', 25, 160.0)
+
+    removed = clip.remove_keyframes_at(8)
+
+    assert set(removed) == {'motion.scale', 'opacity'}
+    assert clip.keyframe_frames() == [25]
+    # opacity keeps its flat envelope, motion.scale still has frame 25
+    assert 'opacity' in clip.envelopes
+    assert clip.get_opacity_at(8) == 1.0
+
+
+def test_deleting_the_last_motion_keyframe_drops_the_envelope():
+    clip = make_clip()
+    clip.set_param_keyframe('motion', 'rotation', 3, 15.0)
+
+    clip.remove_keyframes_at(3)
+
+    assert 'motion.rotation' not in clip.envelopes
+    assert not clip.is_param_animated('motion', 'rotation')
+
+
+def test_restore_recreates_a_dropped_envelope():
+    clip = make_clip()
+    clip.set_param_keyframe('motion', 'scale', 10, 140.0)
+    removed = clip.remove_keyframes_at(10)
+    assert 'motion.scale' not in clip.envelopes
+
+    clip.restore_envelope_keyframes(10, removed)
+
+    assert clip.is_param_animated('motion', 'scale')
+    assert clip.get_param_at('motion', 'scale', 10) == 140.0
+
+
+@requires_qt
+def test_delete_keyframes_command_round_trips():
+    from core.undo import DeleteKeyframesCommand
+    clip = make_clip(has_audio=True)
+    clip.set_param_keyframe('motion', 'scale', 6, 125.0)
+    clip.set_param_keyframe('volume', 'volume_db', 6, -3.0)
+
+    cmd = DeleteKeyframesCommand(clip, 6)
+    cmd.redo()
+    assert clip.keyframe_frames() == []
+
+    cmd.undo()
+    assert clip.keyframe_frames() == [6]
+    assert clip.get_param_at('motion', 'scale', 6) == 125.0
+    assert abs(clip.get_param_at('volume', 'volume_db', 6) + 3.0) < 1e-9

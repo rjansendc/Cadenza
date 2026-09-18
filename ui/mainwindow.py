@@ -977,6 +977,10 @@ class MainWindow(QMainWindow):
             undo_stack.undo()
             self.timeline.refresh()
             self._update_playback_clips()
+            if self._playback and self._playback._compositor:
+                self._playback._compositor.invalidate_cache()
+            if hasattr(self, 'effects_panel'):
+                self.effects_panel.refresh_current_clip()
             self._scrub_to_playhead()
             self.status_label.setText(f'Undo: {desc}')
             self._update_undo_actions()
@@ -990,6 +994,10 @@ class MainWindow(QMainWindow):
             undo_stack.redo()
             self.timeline.refresh()
             self._update_playback_clips()
+            if self._playback and self._playback._compositor:
+                self._playback._compositor.invalidate_cache()
+            if hasattr(self, 'effects_panel'):
+                self.effects_panel.refresh_current_clip()
             self._scrub_to_playhead()
             self.status_label.setText(f'Redo: {desc}')
             self._update_undo_actions()

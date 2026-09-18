@@ -862,6 +862,14 @@ class EffectsPanel(QWidget):
         self.app_state.selection_changed.connect(self._on_selection_changed)
         self.app_state.clip_modified.connect(self._on_clip_modified)
 
+    def refresh_current_clip(self):
+        """
+        Rebuild the panel for whatever clip is selected — used after
+        undo/redo, where keyframes and values can change underneath us.
+        """
+        if self.current_clip is not None:
+            self._show_clip_effects(self.current_clip)
+
     def _on_clip_modified(self, clip_id: str):
         """Refresh Effects panel when clip properties change externally
         (e.g. opacity envelope dragged on the timeline clip)."""
