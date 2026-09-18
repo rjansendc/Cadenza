@@ -1,0 +1,10 @@
+# Normalise line endings: LF in the repository, native in the working tree.
+* text=auto
+
+# Never touch these
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.ico  binary
+*.mp4  binary
+*.veproj binary
