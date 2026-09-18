@@ -12,6 +12,17 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import pytest
+
+try:                       # Qt is present on the dev machine, not in CI
+    import PySide6.QtCore  # noqa: F401
+    HAVE_QT = True
+except Exception:          # missing module, or missing system libraries
+    HAVE_QT = False
+
+requires_qt = pytest.mark.skipif(
+    not HAVE_QT, reason="core.undo imports PySide6")
+
 import effects  # trigger registrations
 from core.clip import Clip
 from core.clip_renderer import ClipRenderer
@@ -146,3 +157,75 @@ def test_keyframes_survive_a_save_load_round_trip(tmp_path):
     reloaded = loaded.clips[clip.id]
     assert reloaded.is_param_animated('motion', 'scale')
     assert reloaded.get_param_at('motion', 'scale', 6) == 137.5
+
+
+# ── dragging markers on the timeline ──────────────────────────────
+
+def test_keyframe_frames_lists_every_animated_param():
+    clip = make_clip()
+    clip.set_param_keyframe('motion', 'scale', 0, 100.0)
+    clip.set_param_keyframe('motion', 'position_x', 0, 960.0)
+    clip.set_param_keyframe('motion', 'scale', 20, 150.0)
+
+    # frame 0 carries two parameters but is one marker
+    assert clip.keyframe_frames('motion') == [0, 20]
+
+
+def test_move_keyframes_retimes_every_param_on_that_frame():
+    clip = make_clip()
+    clip.set_param_keyframe('motion', 'scale', 10, 150.0)
+    clip.set_param_keyframe('motion', 'rotation', 10, 30.0)
+    clip.set_param_keyframe('motion', 'scale', 40, 200.0)
+
+    overwritten = clip.move_keyframes(10, 25, 'motion')
+
+    assert overwritten == {}
+    assert clip.keyframe_frames('motion') == [25, 40]
+    assert clip.get_param_at('motion', 'scale', 25) == 150.0
+    assert clip.get_param_at('motion', 'rotation', 25) == 30.0
+
+
+def test_move_onto_another_keyframe_reports_what_it_replaced():
+    clip = make_clip()
+    clip.set_param_keyframe('motion', 'scale', 5, 120.0)
+    clip.set_param_keyframe('motion', 'scale', 30, 180.0)
+
+    overwritten = clip.move_keyframes(5, 30, 'motion')
+
+    assert overwritten == {'scale': 180.0}
+    assert clip.keyframe_frames('motion') == [30]
+    assert clip.get_param_at('motion', 'scale', 30) == 120.0
+
+
+@requires_qt
+def test_move_keyframes_undo_restores_position_and_overwritten():
+    from core.undo import MoveKeyframesCommand
+    clip = make_clip()
+    clip.set_param_keyframe('motion', 'scale', 5, 120.0)
+    clip.set_param_keyframe('motion', 'scale', 30, 180.0)
+
+    cmd = MoveKeyframesCommand(clip, 'motion', 5, 30, {})
+    cmd.redo()
+    assert clip.keyframe_frames('motion') == [30]
+
+    cmd.undo()
+    assert clip.keyframe_frames('motion') == [5, 30]
+    assert clip.get_param_at('motion', 'scale', 5) == 120.0
+    assert clip.get_param_at('motion', 'scale', 30) == 180.0
+
+
+@requires_qt
+def test_push_can_record_a_change_already_made():
+    from core.undo import UndoStack, MoveKeyframesCommand
+    clip = make_clip()
+    clip.set_param_keyframe('motion', 'scale', 5, 120.0)
+    stack = UndoStack()
+
+    # what a live drag does: move first, make it undoable afterwards
+    overwritten = clip.move_keyframes(5, 18, 'motion')
+    stack.push(MoveKeyframesCommand(clip, 'motion', 5, 18, overwritten),
+               execute=False)
+    assert clip.keyframe_frames('motion') == [18]
+
+    stack.undo()
+    assert clip.keyframe_frames('motion') == [5]

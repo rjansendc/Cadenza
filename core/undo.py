@@ -94,13 +94,18 @@ class UndoStack(QObject):
 
     # ── public API ──────────────────────────────────────────
 
-    def push(self, cmd: UndoCommand):
+    def push(self, cmd: UndoCommand, execute: bool = True):
         """
         Execute cmd and push it onto the stack.
         If a compound is open, adds to it instead.
         Tries to merge with the previous command first.
+
+        execute=False records a change the caller already made — a
+        live drag, for instance, where the work happened as the mouse
+        moved and only needs to become undoable on release.
         """
-        cmd.redo()   # execute immediately
+        if execute:
+            cmd.redo()   # execute immediately
 
         if self._compound is not None:
             self._compound.add(cmd)
@@ -356,6 +361,32 @@ class SetKeyframeCommand(UndoCommand):
             self.new_val = other.new_val
             return True
         return False
+
+
+class MoveKeyframesCommand(UndoCommand):
+    """Retime every keyframe sitting on one frame (a timeline marker)."""
+
+    def __init__(self, clip, effect_id: str,
+                 from_frame: int, to_frame: int,
+                 overwritten: dict):
+        super().__init__("Move keyframe")
+        self.clip        = clip
+        self.effect_id   = effect_id
+        self.from_frame  = from_frame
+        self.to_frame    = to_frame
+        self.overwritten = dict(overwritten or {})
+
+    def redo(self):
+        self.overwritten = self.clip.move_keyframes(
+            self.from_frame, self.to_frame, self.effect_id)
+
+    def undo(self):
+        self.clip.move_keyframes(
+            self.to_frame, self.from_frame, self.effect_id)
+        # restore whatever the move landed on top of
+        for param, value in self.overwritten.items():
+            self.clip.set_param_keyframe(
+                self.effect_id, param, self.to_frame, value)
 
 
 class RemoveKeyframeCommand(UndoCommand):

@@ -62,6 +62,11 @@ class ClipItem(QGraphicsRectItem):
         self.track_y = track_y   # set by timeline
         self.track_h = track_h   # set by timeline
 
+        # keyframe marker drag state
+        self._kf_drag_frame    = None   # frame being dragged
+        self._kf_drag_orig     = None   # where it started
+        self._kf_overwritten   = {}     # keyframes it landed on
+
         # opacity envelope drag state
         self._env_dragging     = False
         self._env_drag_start_y = 0.0
@@ -270,39 +275,72 @@ class ClipItem(QGraphicsRectItem):
     # Effect keyframes
     # =========================================================
 
+    KF_HALF_H = 4.5        # taller than wide, easier to see
+    KF_HALF_W = 3.25
+    KF_GRAB   = 6.0        # px either side counts as a hit
+
+    def _keyframe_marker_x(self, rect, frame: int) -> float:
+        """Screen x of a marker, nudged clear of the clip's edges."""
+        duration = max(1, self.clip.duration)
+        x = rect.left() + frame * (rect.width() / duration)
+        return min(max(x, rect.left() + self.KF_HALF_W + 2),
+                   rect.right() - self.KF_HALF_W - 1)
+
+    def _keyframe_marker_y(self, rect) -> float:
+        return rect.bottom() - self.KF_HALF_H - 1.5
+
+    def _keyframe_at_pos(self, pos):
+        """Local frame of the marker under the cursor, or None."""
+        if not self.clip.has_video:
+            return None
+        rect = self.rect()
+        if rect.width() < 20:
+            return None
+        y = self._keyframe_marker_y(rect)
+        if abs(pos.y() - y) > self.KF_HALF_H + 3:
+            return None
+        best, best_dx = None, self.KF_GRAB
+        for f in self.clip.keyframe_frames('motion'):
+            dx = abs(pos.x() - self._keyframe_marker_x(rect, f))
+            if dx <= best_dx:
+                best, best_dx = f, dx
+        return best
+
+    def _frame_at_x(self, x: float) -> int:
+        """Clip-local frame under a screen x, clamped to the clip."""
+        rect = self.rect()
+        duration = max(1, self.clip.duration)
+        if rect.width() <= 0:
+            return 0
+        frame = round((x - rect.left()) / rect.width() * duration)
+        return int(max(0, min(duration, frame)))
+
     def _draw_keyframe_markers(self, painter, rect):
         """
         Small diamonds along the bottom of the clip, one per frame
-        that carries a Motion keyframe. Read-only for now: they show
-        where the animation happens, the values are edited in Effect
-        Controls.
+        that carries a Motion keyframe. Drag one to retime every
+        parameter keyframed at that frame; values are edited in
+        Effect Controls.
         """
         duration = max(1, self.clip.duration)
         if rect.width() < 20:
             return
 
-        frames = set()
-        for key, env in self.clip.envelopes.items():
-            if not key.startswith('motion.'):
-                continue
-            for kf in getattr(env, 'keyframes', []):
-                if 0 <= kf.frame <= duration:
-                    frames.add(kf.frame)
+        frames = [f for f in self.clip.keyframe_frames('motion')
+                  if 0 <= f <= duration]
         if not frames:
             return
 
-        px_per_frame = rect.width() / duration
-        half_h = 4.5                      # taller than wide, easier to see
-        half_w = 3.25
-        y = rect.bottom() - half_h - 1.5
+        half_h = self.KF_HALF_H
+        half_w = self.KF_HALF_W
+        y = self._keyframe_marker_y(rect)
 
-        painter.setBrush(QColor('#000000'))
         painter.setPen(QPen(QColor('#e0e0e0'), 0.8))   # light edge to lift
-        for f in sorted(frames):          # off black clip colours
-            x = rect.left() + f * px_per_frame
-            # a keyframe at frame 0 would sit under the accent bar
-            x = min(max(x, rect.left() + half_w + 2),
-                    rect.right() - half_w - 1)
+        for f in frames:                  # off black clip colours
+            # the one being dragged reads back from Effect Controls blue
+            painter.setBrush(QColor(
+                '#4a9de0' if f == self._kf_drag_frame else '#000000'))
+            x = self._keyframe_marker_x(rect, f)
             painter.drawPolygon(QPolygonF([
                 QPointF(x, y - half_h),
                 QPointF(x + half_w, y),
@@ -650,6 +688,18 @@ class ClipItem(QGraphicsRectItem):
                 event.accept()
                 return
 
+        if (tool == 'select' and
+                event.button() == Qt.MouseButton.LeftButton):
+            kf = self._keyframe_at_pos(event.pos())
+            if kf is not None:
+                self._kf_drag_frame  = kf
+                self._kf_drag_orig   = kf
+                self._kf_overwritten = {}
+                self.grabMouse()
+                self.update()
+                event.accept()
+                return
+
         if (event.button() == Qt.MouseButton.LeftButton
                 and self._near_envelope(event.pos())):
             self._env_dragging     = True
@@ -741,6 +791,21 @@ class ClipItem(QGraphicsRectItem):
 
 
     def mouseMoveEvent(self, event):
+        # keyframe marker drag
+        if self._kf_drag_frame is not None:
+            target = self._frame_at_x(event.pos().x())
+            if target != self._kf_drag_frame:
+                hit = self.clip.move_keyframes(
+                    self._kf_drag_frame, target, 'motion')
+                # keep the first set we displaced; later moves in the
+                # same drag would otherwise overwrite the record
+                for param, value in hit.items():
+                    self._kf_overwritten.setdefault(param, value)
+                self._kf_drag_frame = target
+                self.update()
+            event.accept()
+            return
+
         # trim handle drag
         if self._trim_edge is not None:
             delta_px = (
@@ -1134,6 +1199,25 @@ class ClipItem(QGraphicsRectItem):
 
 
     def mouseReleaseEvent(self, event):
+        # keyframe marker drag
+        if self._kf_drag_frame is not None:
+            self.ungrabMouse()
+            start, end = self._kf_drag_orig, self._kf_drag_frame
+            overwritten = self._kf_overwritten
+            self._kf_drag_frame  = None
+            self._kf_drag_orig   = None
+            self._kf_overwritten = {}
+            if end != start:
+                from core.undo import undo_stack, MoveKeyframesCommand
+                cmd = MoveKeyframesCommand(
+                    self.clip, 'motion', start, end, overwritten)
+                # the move already happened during the drag
+                undo_stack.push(cmd, execute=False)
+                self.app_state.clip_modified.emit(self.clip.id)
+            self.update()
+            event.accept()
+            return
+
         self._env_dragging = False
         if self._trim_edge is not None:
             self.ungrabMouse()
@@ -1261,6 +1345,10 @@ class ClipItem(QGraphicsRectItem):
             return
         edge = self._trim_edge_at(event.pos())
         if edge:
+            self.setCursor(
+                Qt.CursorShape.SizeHorCursor
+            )
+        elif self._keyframe_at_pos(event.pos()) is not None:
             self.setCursor(
                 Qt.CursorShape.SizeHorCursor
             )

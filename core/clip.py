@@ -144,6 +144,50 @@ class Clip:
         if not env.keyframes:
             del self.envelopes[key]
 
+    def keyframe_frames(self, effect_id: str = 'motion') -> list:
+        """Every frame carrying a keyframe for this effect, sorted."""
+        prefix = f"{effect_id}."
+        frames = set()
+        for key, env in self.envelopes.items():
+            if not key.startswith(prefix):
+                continue
+            for kf in getattr(env, 'keyframes', []):
+                frames.add(kf.frame)
+        return sorted(frames)
+
+    def move_keyframes(self, from_frame: int, to_frame: int,
+                        effect_id: str = 'motion') -> dict:
+        """
+        Retime every keyframe of this effect that sits on from_frame.
+
+        Timeline markers stand for a frame, not a single parameter, so
+        dragging one moves all the parameters keyframed there together.
+        Returns {param: value} for any keyframes overwritten at the
+        destination, so undo can put them back.
+        """
+        if from_frame == to_frame:
+            return {}
+
+        prefix = f"{effect_id}."
+        moving = {}
+        overwritten = {}
+
+        for key, env in self.envelopes.items():
+            if not key.startswith(prefix):
+                continue
+            param = key[len(prefix):]
+            for kf in list(env.keyframes):
+                if kf.frame == from_frame:
+                    moving[param] = kf.value
+                elif kf.frame == to_frame:
+                    overwritten[param] = kf.value
+
+        for param, value in moving.items():
+            self.remove_param_keyframe(effect_id, param, from_frame)
+            self.set_param_keyframe(effect_id, param, to_frame, value)
+
+        return overwritten
+
     def get_volume_at(self, frame: int) -> float:
         """Volume at a specific frame."""
         env = self.envelopes.get('volume')
