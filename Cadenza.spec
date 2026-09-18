@@ -12,6 +12,7 @@ a = Analysis(
         'effects.video.motion',
         'effects.video.opacity',
         'effects.video.lumetri',
+        'effects.video.time_remap',
         'effects.audio.volume',
         'effects.audio.pan',
     ],

@@ -151,13 +151,23 @@ class ClipRenderer:
                 'crop_top':     0.0,
                 'crop_bottom':  0.0,
             }
-        return {k: motion.get(k) for k in [
+        # Animated parameters come from their envelope at this
+        # clip-local frame; the rest are the effect's static values.
+        lf = self.local_frame(timeline_frame)
+        animatable = [
             'position_x', 'position_y', 'scale',
-            'scale_x', 'uniform_scale', 'rotation',
+            'scale_x', 'rotation',
             'anchor_x', 'anchor_y',
             'crop_left', 'crop_right',
             'crop_top', 'crop_bottom',
-        ]}
+        ]
+        params = {
+            k: self.clip.get_param_at('motion', k, lf)
+            for k in animatable
+        }
+        # uniform_scale is a switch, never keyframed
+        params['uniform_scale'] = motion.get('uniform_scale')
+        return params
 
     # =========================================================
     # Private

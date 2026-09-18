@@ -321,6 +321,64 @@ class DeleteClipCommand(UndoCommand):
         self.timeline_add_fn(self.clip)
 
 
+class SetKeyframeCommand(UndoCommand):
+    """Add or move a keyframe on an effect parameter."""
+
+    def __init__(self, clip, effect_id: str, param: str,
+                 frame: int, old_val, new_val):
+        super().__init__(f"Keyframe {param}")
+        self.clip      = clip
+        self.effect_id = effect_id
+        self.param     = param
+        self.frame     = frame
+        self.old_val   = old_val      # None = there was no keyframe
+        self.new_val   = new_val
+
+    def redo(self):
+        self.clip.set_param_keyframe(
+            self.effect_id, self.param, self.frame, self.new_val)
+
+    def undo(self):
+        if self.old_val is None:
+            self.clip.remove_param_keyframe(
+                self.effect_id, self.param, self.frame)
+        else:
+            self.clip.set_param_keyframe(
+                self.effect_id, self.param, self.frame, self.old_val)
+
+    def try_merge(self, other: UndoCommand) -> bool:
+        # dragging a spinbox shouldn't fill the undo stack
+        if (isinstance(other, SetKeyframeCommand) and
+                other.clip is self.clip and
+                other.effect_id == self.effect_id and
+                other.param == self.param and
+                other.frame == self.frame):
+            self.new_val = other.new_val
+            return True
+        return False
+
+
+class RemoveKeyframeCommand(UndoCommand):
+    """Delete a keyframe from an effect parameter."""
+
+    def __init__(self, clip, effect_id: str, param: str,
+                 frame: int, old_val):
+        super().__init__(f"Remove keyframe {param}")
+        self.clip      = clip
+        self.effect_id = effect_id
+        self.param     = param
+        self.frame     = frame
+        self.old_val   = old_val
+
+    def redo(self):
+        self.clip.remove_param_keyframe(
+            self.effect_id, self.param, self.frame)
+
+    def undo(self):
+        self.clip.set_param_keyframe(
+            self.effect_id, self.param, self.frame, self.old_val)
+
+
 class RazorCutCommand(UndoCommand):
     def __init__(self, project, original_clip, left_clip,
                  right_clip, timeline_add_fn, timeline_remove_fn):

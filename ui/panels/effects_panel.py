@@ -30,17 +30,30 @@ class ParameterWidget(QWidget):
     
     value_changed = Signal(str, object)  # param_name, value
     
-    def __init__(self, param_def, effect, parent=None):
+    def __init__(self, param_def, effect, clip=None,
+                 app_state=None, parent=None):
         super().__init__(parent)
         self.param_def = param_def
         self.effect = effect
+        self.clip = clip
+        self.app_state = app_state
         self._updating = False  # Prevent recursion
         self._slider   = None   # optional slider for dB params
+
+        # Keyframable parameters: motion's numeric ones for now.
+        # volume/opacity/pan already have their own envelopes in
+        # different units, so they stay on the old path.
+        self.animatable = (
+            clip is not None
+            and effect.id == 'motion'
+            and param_def.param_type == ParamType.FLOAT
+        )
 
         has_slider = (param_def.unit == 'dB')
         self.setFixedHeight(50 if has_slider else 30)
         self._build_ui()
         self._update_from_effect()
+        self._on_playhead_moved()
         
     def _build_ui(self):
         from PySide6.QtWidgets import QSlider
@@ -174,7 +187,7 @@ class ParameterWidget(QWidget):
             """)
             layout.addWidget(unit_label)
         
-        # Keyframe diamond (placeholder)
+        # Keyframe diamond
         keyframe_btn = QPushButton("◊")
         keyframe_btn.setFixedSize(16, 16)
         keyframe_btn.setStyleSheet("""
@@ -187,8 +200,19 @@ class ParameterWidget(QWidget):
             QPushButton:hover {
                 color: #aaaaaa;
             }
+            QPushButton:disabled {
+                color: #3a3a3a;
+            }
         """)
-        keyframe_btn.setToolTip("Add keyframe (not implemented)")
+        self.keyframe_btn = keyframe_btn
+        if self.animatable:
+            keyframe_btn.clicked.connect(self._toggle_keyframe)
+            if self.app_state is not None:
+                self.app_state.playhead_changed.connect(
+                    self._on_playhead_moved)
+        else:
+            keyframe_btn.setEnabled(False)
+            keyframe_btn.setToolTip("Not keyframable")
         layout.addWidget(keyframe_btn)
         
         # Reset button
@@ -384,6 +408,86 @@ class ParameterWidget(QWidget):
         self.effect.set(self.param_def.name, db)
         self.value_changed.emit(self.param_def.name, db)
 
+    # ── keyframes ─────────────────────────────────────────────
+
+    def current_local_frame(self) -> int:
+        """Playhead position relative to the clip's start."""
+        if self.clip is None or self.app_state is None:
+            return 0
+        return max(0, self.app_state.playhead_frame -
+                   self.clip.start_frame)
+
+    def is_animated(self) -> bool:
+        return bool(
+            self.animatable and
+            self.clip.is_param_animated(
+                self.effect.id, self.param_def.name)
+        )
+
+    def _toggle_keyframe(self):
+        """Diamond click: add a keyframe here, or remove one."""
+        from core.undo import (undo_stack, SetKeyframeCommand,
+                                RemoveKeyframeCommand)
+        name  = self.param_def.name
+        frame = self.current_local_frame()
+
+        if self.clip.has_keyframe_at(self.effect.id, name, frame):
+            old = self.clip.get_param_at(self.effect.id, name, frame)
+            self.clip.remove_param_keyframe(self.effect.id, name, frame)
+            undo_stack.push(RemoveKeyframeCommand(
+                self.clip, self.effect.id, name, frame, old))
+        else:
+            value = self.clip.get_param_at(self.effect.id, name, frame)
+            if value is None:
+                value = self.effect.get(name)
+            self.clip.set_param_keyframe(
+                self.effect.id, name, frame, float(value))
+            undo_stack.push(SetKeyframeCommand(
+                self.clip, self.effect.id, name, frame,
+                None, float(value)))
+
+        self._update_keyframe_button()
+        self.value_changed.emit(name, self.effect.get(name))
+
+    def _update_keyframe_button(self):
+        """◆ keyframe here · ◇ animated elsewhere · ◊ not animated."""
+        if not self.animatable:
+            return
+        name  = self.param_def.name
+        frame = self.current_local_frame()
+        if self.clip.has_keyframe_at(self.effect.id, name, frame):
+            self.keyframe_btn.setText("◆")
+            self.keyframe_btn.setToolTip("Remove keyframe here")
+            colour = "#4a9de0"
+        elif self.is_animated():
+            self.keyframe_btn.setText("◇")
+            self.keyframe_btn.setToolTip("Add keyframe here")
+            colour = "#4a9de0"
+        else:
+            self.keyframe_btn.setText("◊")
+            self.keyframe_btn.setToolTip("Add keyframe here")
+            colour = "#666666"
+        self.keyframe_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none;"
+            f" font-size: 10px; color: {colour}; }}"
+            " QPushButton:hover { color: #ffffff; }"
+        )
+
+    def _on_playhead_moved(self, _frame=None):
+        """Follow the animated value as the playhead moves."""
+        if self.is_animated():
+            self._updating = True
+            try:
+                value = self.clip.get_param_at(
+                    self.effect.id, self.param_def.name,
+                    self.current_local_frame())
+                if value is not None and isinstance(
+                        self.input_widget, (QDoubleSpinBox, QSpinBox)):
+                    self.input_widget.setValue(value)
+            finally:
+                self._updating = False
+        self._update_keyframe_button()
+
     def _on_value_changed(self, value):
         """Handle input value changes."""
         if self._updating:
@@ -394,6 +498,24 @@ class ParameterWidget(QWidget):
             self._updating = True
             self._slider.setValue(self._db_to_slider(float(value)))
             self._updating = False
+
+        # An animated parameter writes to its curve at the playhead
+        # instead of the static value, like Premiere's auto-keyframing.
+        if self.is_animated():
+            from core.undo import undo_stack, SetKeyframeCommand
+            name  = self.param_def.name
+            frame = self.current_local_frame()
+            old = (self.clip.get_param_at(self.effect.id, name, frame)
+                   if self.clip.has_keyframe_at(
+                       self.effect.id, name, frame) else None)
+            self.clip.set_param_keyframe(
+                self.effect.id, name, frame, float(value))
+            undo_stack.push(SetKeyframeCommand(
+                self.clip, self.effect.id, name, frame,
+                old, float(value)))
+            self._update_keyframe_button()
+            self.value_changed.emit(name, value)
+            return
 
         # Store value in effect
         self.effect.set(self.param_def.name, value)
@@ -438,9 +560,12 @@ class EffectSectionWidget(QWidget):
     
     parameter_changed = Signal(str, str, object)  # effect_id, param_name, value
     
-    def __init__(self, effect: EffectBase, parent=None):
+    def __init__(self, effect: EffectBase, clip=None,
+                 app_state=None, parent=None):
         super().__init__(parent)
         self.effect = effect
+        self.clip = clip
+        self.app_state = app_state
         self.expanded = True
         self.parameter_widgets = []
         
@@ -546,7 +671,8 @@ class EffectSectionWidget(QWidget):
                 self.params_layout.addWidget(separator)
             
             # Create parameter widget
-            param_widget = ParameterWidget(param_def, self.effect)
+            param_widget = ParameterWidget(
+                param_def, self.effect, self.clip, self.app_state)
             param_widget.value_changed.connect(
                 lambda name, value, eid=self.effect.id: 
                 self.parameter_changed.emit(eid, name, value)
@@ -791,7 +917,8 @@ class EffectsPanel(QWidget):
             self.effects_layout.addWidget(video_header)
             
             for effect in video_effects:
-                effect_widget = EffectSectionWidget(effect)
+                effect_widget = EffectSectionWidget(
+                    effect, clip, self.app_state)
                 effect_widget.parameter_changed.connect(self._on_parameter_changed)
                 self.effect_widgets.append(effect_widget)
                 self.effects_layout.addWidget(effect_widget)
@@ -802,7 +929,8 @@ class EffectsPanel(QWidget):
             self.effects_layout.addWidget(audio_header)
             
             for effect in audio_effects:
-                effect_widget = EffectSectionWidget(effect)
+                effect_widget = EffectSectionWidget(
+                    effect, clip, self.app_state)
                 effect_widget.parameter_changed.connect(self._on_parameter_changed)
                 self.effect_widgets.append(effect_widget)
                 self.effects_layout.addWidget(effect_widget)
@@ -906,6 +1034,9 @@ class EffectsPanel(QWidget):
                 undo_stack.push(SetEffectParamCommand(
                     clip, 'pan', 'pan', old_val, float(value) / 100.0
                 ))
+            elif clip.is_param_animated(effect_id, param_name):
+                # ParameterWidget pushed a SetKeyframeCommand already
+                pass
             else:
                 # Generic effect param (scale, rotation, position, etc.)
                 fx = clip.get_effect(effect_id)

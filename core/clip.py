@@ -74,6 +74,76 @@ class Clip:
                 default_value=0.0
             )
 
+    # ── effect parameter keyframes ────────────────────────────
+    # Envelopes are keyed "<effect_id>.<param>" (e.g. "motion.scale").
+    # The three original envelopes keep their bare names
+    # ('volume', 'opacity', 'pan') so old projects still load.
+
+    @staticmethod
+    def envelope_key(effect_id: str, param: str) -> str:
+        return f"{effect_id}.{param}"
+
+    def is_param_animated(self, effect_id: str,
+                           param: str) -> bool:
+        """True when this parameter has keyframes."""
+        env = self.envelopes.get(
+            self.envelope_key(effect_id, param))
+        return bool(env and env.keyframes)
+
+    def has_keyframe_at(self, effect_id: str, param: str,
+                         frame: int) -> bool:
+        env = self.envelopes.get(
+            self.envelope_key(effect_id, param))
+        if not env:
+            return False
+        return any(kf.frame == frame for kf in env.keyframes)
+
+    def get_param_at(self, effect_id: str, param: str,
+                      frame: int):
+        """
+        Parameter value at a clip-local frame: the envelope when
+        keyframed, otherwise the effect's static value.
+        """
+        env = self.envelopes.get(
+            self.envelope_key(effect_id, param))
+        if env and env.keyframes:
+            return env.value_at(frame)
+        fx = self.get_effect(effect_id)
+        return fx.get(param) if fx else None
+
+    def set_param_keyframe(self, effect_id: str, param: str,
+                            frame: int, value: float):
+        """Add or move a keyframe, creating the envelope if needed."""
+        from core.envelope import Envelope
+        key = self.envelope_key(effect_id, param)
+        env = self.envelopes.get(key)
+        if env is None:
+            fx = self.get_effect(effect_id)
+            static = fx.get(param) if fx else value
+            env = Envelope(
+                param=key,
+                default_value=(
+                    float(static) if static is not None
+                    else float(value)
+                ),
+            )
+            self.envelopes[key] = env
+        env.add_keyframe(frame, float(value))
+
+    def remove_param_keyframe(self, effect_id: str, param: str,
+                               frame: int):
+        """
+        Remove one keyframe. When the last one goes, drop the
+        envelope so the static value takes over again.
+        """
+        key = self.envelope_key(effect_id, param)
+        env = self.envelopes.get(key)
+        if env is None:
+            return
+        env.remove_keyframe(frame)
+        if not env.keyframes:
+            del self.envelopes[key]
+
     def get_volume_at(self, frame: int) -> float:
         """Volume at a specific frame."""
         env = self.envelopes.get('volume')

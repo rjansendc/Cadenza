@@ -51,15 +51,11 @@ class MotionEffect(EffectBase):
                      maximum=100.0, unit='%'),
         ]
 
-    def apply_video(self, frame_tensor, 
-                    params: Dict[str, Any]):
-        """
-        GPU transform — scale, rotate, position, crop.
-        Full implementation goes in gpu/compositor.py.
-        This delegates there.
-        """
-        from gpu.compositor import apply_motion
-        return apply_motion(frame_tensor, params)
+    # No apply_video: motion is not run as part of the effect stack.
+    # Compositor._apply_motion applies it first, straight from the
+    # ClipRenderer's parameters, and _apply_video_effects skips this
+    # effect by id. Inheriting the base passthrough keeps it harmless
+    # if anything ever does call it.
 
     def scale_to_frame(self, clip_w, clip_h, 
                         canvas_w, canvas_h):
