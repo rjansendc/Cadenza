@@ -252,6 +252,10 @@ class ParameterWidget(QWidget):
                                 self.param_def.maximum)
                 widget.setSingleStep(self.param_def.step)
                 widget.setDecimals(2)
+            # Commit on Enter / focus-out / the arrows — not on every
+            # keystroke, which fired 1, 15, 150 while typing "150" and
+            # re-rendered the preview for each.
+            widget.setKeyboardTracking(False)
             widget.valueChanged.connect(self._on_value_changed)
             widget.setStyleSheet(self._get_spinbox_style())
             return widget
@@ -259,6 +263,7 @@ class ParameterWidget(QWidget):
         elif param_type == ParamType.INT:
             widget = QSpinBox()
             widget.setRange(int(self.param_def.minimum), int(self.param_def.maximum))
+            widget.setKeyboardTracking(False)
             widget.valueChanged.connect(self._on_value_changed)
             widget.setStyleSheet(self._get_spinbox_style())
             return widget
@@ -447,6 +452,8 @@ class ParameterWidget(QWidget):
                 None, float(value)))
 
         self._update_keyframe_button()
+        if self.app_state is not None:
+            self.app_state.clip_modified.emit(self.clip.id)
         self.value_changed.emit(name, self.effect.get(name))
 
     _KF_STYLES = {
@@ -537,6 +544,9 @@ class ParameterWidget(QWidget):
                 self.clip, self.effect.id, name, frame,
                 old, float(value)))
             self._update_keyframe_button()
+            if old is None and self.app_state is not None:
+                # a new keyframe — the timeline marker needs drawing
+                self.app_state.clip_modified.emit(self.clip.id)
             self.value_changed.emit(name, value)
             return
 

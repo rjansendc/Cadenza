@@ -156,6 +156,11 @@ class TimelinePanel(QWidget):
             self._on_tool_changed
         )
 
+        # repaint a clip when its effects/keyframes change
+        self.app_state.clip_modified.connect(
+            self._on_clip_modified
+        )
+
         # ── Zoom bar ─────────────────────────────────────
         zoom_row = QHBoxLayout()
         zoom_row.setContentsMargins(0, 0, 0, 0)
@@ -371,6 +376,13 @@ class TimelinePanel(QWidget):
             if clip_id in row.canvas._clip_items:
                 row.canvas.remove_clip(clip_id)
                 return
+
+    def _on_clip_modified(self, clip_id: str = None):
+        """Repaint one clip — keyframe markers, envelope, colours."""
+        for row in self._rows.values():
+            item = row.canvas._clip_items.get(clip_id)
+            if item is not None:
+                item.update()
 
     def refresh(self):
         """

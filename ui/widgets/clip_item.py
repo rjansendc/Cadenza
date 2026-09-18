@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem
 from PySide6.QtCore import Qt, QRectF, QPointF
 from PySide6.QtGui import (
-    QColor, QPen, QPainter, QBrush, QFont
+    QColor, QPen, QPainter, QBrush, QFont, QPolygonF
 )
 from core.clip import Clip
 from ui.app_state import AppState
@@ -264,6 +264,51 @@ class ClipItem(QGraphicsRectItem):
         # opacity envelope line — video clips only
         if self.clip.has_video:
             self._draw_opacity_envelope(painter, rect)
+            self._draw_keyframe_markers(painter, rect)
+
+    # =========================================================
+    # Effect keyframes
+    # =========================================================
+
+    def _draw_keyframe_markers(self, painter, rect):
+        """
+        Small diamonds along the bottom of the clip, one per frame
+        that carries a Motion keyframe. Read-only for now: they show
+        where the animation happens, the values are edited in Effect
+        Controls.
+        """
+        duration = max(1, self.clip.duration)
+        if rect.width() < 20:
+            return
+
+        frames = set()
+        for key, env in self.clip.envelopes.items():
+            if not key.startswith('motion.'):
+                continue
+            for kf in getattr(env, 'keyframes', []):
+                if 0 <= kf.frame <= duration:
+                    frames.add(kf.frame)
+        if not frames:
+            return
+
+        px_per_frame = rect.width() / duration
+        half_h = 4.5                      # taller than wide, easier to see
+        half_w = 3.25
+        y = rect.bottom() - half_h - 1.5
+
+        painter.setBrush(QColor('#000000'))
+        painter.setPen(QPen(QColor('#e0e0e0'), 0.8))   # light edge to lift
+        for f in sorted(frames):          # off black clip colours
+            x = rect.left() + f * px_per_frame
+            # a keyframe at frame 0 would sit under the accent bar
+            x = min(max(x, rect.left() + half_w + 2),
+                    rect.right() - half_w - 1)
+            painter.drawPolygon(QPolygonF([
+                QPointF(x, y - half_h),
+                QPointF(x + half_w, y),
+                QPointF(x, y + half_h),
+                QPointF(x - half_w, y),
+            ]))
 
     # =========================================================
     # Opacity envelope
