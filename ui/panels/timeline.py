@@ -137,10 +137,25 @@ class TimelinePanel(QWidget):
         self._scroll.setFrameShape(
             QScrollArea.Shape.NoFrame
         )
-        self._scroll.setStyleSheet(
-            'QScrollArea { background: #111111; '
-            'border: none; }'
-        )
+        self._scroll.setStyleSheet('''
+            QScrollArea { background: #111111; border: none; }
+            QScrollBar:vertical {
+                background: #1a1a1a;
+                width: 12px;
+                margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #4a4a4a;
+                border-radius: 5px;
+                min-height: 24px;
+                margin: 1px;
+            }
+            QScrollBar::handle:vertical:hover { background: #5f5f5f; }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical { background: #141414; }
+        ''')
 
         self._track_stack = TrackStack()
         self._scroll.setWidget(self._track_stack)

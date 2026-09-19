@@ -73,6 +73,15 @@ class PlaybackEngine(QObject):
         """Update clip list."""
         self._clips = clips
 
+        # Follow the current sequence. It was only passed to the mixer
+        # before, so after opening a project the compositor still held
+        # the sequence captured at startup — and anything read from it,
+        # transitions included, was invisible during playback.
+        if sequence is not None and sequence is not self.sequence:
+            self.sequence = sequence
+            if self._compositor is not None:
+                self._compositor.sequence = sequence
+
         if self._compositor is None:
             from gpu.compositor import Compositor
             self._compositor = Compositor(self.sequence)

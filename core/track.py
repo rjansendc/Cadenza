@@ -57,6 +57,8 @@ class Sequence:
     )
     video_tracks: List[Track] = field(default_factory=list)
     audio_tracks: List[Track] = field(default_factory=list)
+    # cross dissolves sitting at cuts on video tracks
+    transitions: List = field(default_factory=list)
 
     def __post_init__(self):
         if not self.video_tracks:

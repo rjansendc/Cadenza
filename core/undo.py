@@ -383,6 +383,44 @@ class DeleteKeyframesCommand(UndoCommand):
             self.frame, self.removed)
 
 
+class AddTransitionCommand(UndoCommand):
+    """Add a cross dissolve at a cut."""
+
+    def __init__(self, sequence, transition):
+        super().__init__("Add cross dissolve")
+        self.sequence   = sequence
+        self.transition = transition
+
+    def redo(self):
+        if self.transition not in self.sequence.transitions:
+            self.sequence.transitions.append(self.transition)
+
+    def undo(self):
+        try:
+            self.sequence.transitions.remove(self.transition)
+        except ValueError:
+            pass
+
+
+class RemoveTransitionCommand(UndoCommand):
+    """Delete a cross dissolve."""
+
+    def __init__(self, sequence, transition):
+        super().__init__("Remove cross dissolve")
+        self.sequence   = sequence
+        self.transition = transition
+
+    def redo(self):
+        try:
+            self.sequence.transitions.remove(self.transition)
+        except ValueError:
+            pass
+
+    def undo(self):
+        if self.transition not in self.sequence.transitions:
+            self.sequence.transitions.append(self.transition)
+
+
 class MoveKeyframesCommand(UndoCommand):
     """Retime every keyframe sitting on one frame (a timeline marker)."""
 

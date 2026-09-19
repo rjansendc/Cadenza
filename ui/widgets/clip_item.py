@@ -269,7 +269,47 @@ class ClipItem(QGraphicsRectItem):
         # opacity envelope line — video clips only
         if self.clip.has_video:
             self._draw_opacity_envelope(painter, rect)
+            self._draw_dissolves(painter, rect)
         self._draw_keyframe_markers(painter, rect)
+
+    def _draw_dissolves(self, painter, rect):
+        """
+        A dissolve at either end of this clip, drawn as the crossing
+        diagonals editors expect — the outgoing line falling, the
+        incoming one rising.
+        """
+        seq = self._sequence()
+        if seq is None or not getattr(seq, 'transitions', None):
+            return
+        duration = max(1, self.clip.duration)
+        px_per_frame = rect.width() / duration
+        clip_end = self.clip.start_frame + self.clip.duration
+
+        for tr in seq.transitions:
+            if tr.track != self.clip.track:
+                continue
+            if tr.center_frame not in (self.clip.start_frame, clip_end):
+                continue
+
+            # the half of the dissolve that lies over this clip
+            first = max(tr.start_frame, self.clip.start_frame)
+            last  = min(tr.end_frame, clip_end)
+            if last <= first:
+                continue
+            x1 = rect.left() + (first - self.clip.start_frame) * px_per_frame
+            x2 = rect.left() + (last - self.clip.start_frame) * px_per_frame
+
+            box = QRectF(x1, rect.top() + 1,
+                         max(2.0, x2 - x1), rect.height() - 2)
+            painter.setBrush(QColor(255, 255, 255, 38))
+            painter.setPen(QPen(QColor('#dddddd'), 1))
+            painter.drawRect(box)
+            painter.drawLine(
+                QPointF(box.left(), box.bottom()),
+                QPointF(box.right(), box.top()))
+            painter.drawLine(
+                QPointF(box.left(), box.top()),
+                QPointF(box.right(), box.bottom()))
 
     # =========================================================
     # Effect keyframes
@@ -312,6 +352,101 @@ class ClipItem(QGraphicsRectItem):
             return 0
         frame = round((x - rect.left()) / rect.width() * duration)
         return int(max(0, min(duration, frame)))
+
+    # =========================================================
+    # Cross dissolve
+    # =========================================================
+
+    def _sequence(self):
+        main = self._get_main_window()
+        return main.project.active_sequence if main else None
+
+    def _nearest_cut(self, pos):
+        """
+        The cut this click is closest to: the start or end of this
+        clip, if another clip butts against it there.
+        """
+        main = self._get_main_window()
+        if not main:
+            return None
+        from core.transition import cut_points
+        cuts = cut_points(main.project.clips.values(), self.clip.track)
+        mine = [f for f in cuts
+                if f in (self.clip.start_frame,
+                         self.clip.start_frame + self.clip.duration)]
+        if not mine:
+            return None
+        if len(mine) == 1:
+            return mine[0]
+        # both ends meet a neighbour — take the nearer to the click
+        rect = self.rect()
+        halfway = rect.left() + rect.width() / 2
+        return min(mine) if pos.x() < halfway else max(mine)
+
+    def _transition_at(self, cut):
+        seq = self._sequence()
+        if seq is None or cut is None:
+            return None
+        for tr in getattr(seq, 'transitions', []):
+            if tr.track == self.clip.track and tr.center_frame == cut:
+                return tr
+        return None
+
+    def _add_dissolve(self, cut):
+        from PySide6.QtWidgets import QInputDialog
+        from core.transition import (Transition, max_duration,
+                                      DEFAULT_DURATION)
+        from core.undo import undo_stack, AddTransitionCommand
+
+        main = self._get_main_window()
+        seq = self._sequence()
+        if seq is None or cut is None or not main:
+            return
+
+        longest = max_duration(main.project.clips.values(),
+                               self.clip.track, cut)
+        if longest <= 0:
+            return
+        default = min(DEFAULT_DURATION, longest)
+
+        frames, ok = QInputDialog.getInt(
+            None, 'Cross Dissolve',
+            f'Duration in frames (1 - {longest}):',
+            default, 1, longest, 1)
+        if not ok:
+            return
+
+        tr = Transition(track=self.clip.track, center_frame=cut,
+                        duration=int(frames))
+        undo_stack.push(AddTransitionCommand(seq, tr))
+        self._after_transition_change(main)
+
+    def _remove_dissolve(self, cut):
+        from core.undo import undo_stack, RemoveTransitionCommand
+        main = self._get_main_window()
+        seq = self._sequence()
+        tr = self._transition_at(cut)
+        if seq is None or tr is None or not main:
+            return
+        undo_stack.push(RemoveTransitionCommand(seq, tr))
+        self._after_transition_change(main)
+
+    def _after_transition_change(self, main):
+        """
+        Repaint the clips either side of the cut and refresh the
+        picture. Deliberately not a full timeline refresh: that
+        rebuilds every row and resets the view, which reads as the
+        timeline suddenly rescaling.
+        """
+        if main._playback and main._playback._compositor:
+            main._playback._compositor.invalidate_cache()
+        panel = self._get_panel()
+        if panel:
+            for row in panel._rows.values():
+                for item in row.canvas._clip_items.values():
+                    if item.clip.track == self.clip.track:
+                        item.update()
+        main._scrub_to_playhead()
 
     def _keyframe_menu(self, event, frame: int):
         """Small menu for one marker."""
@@ -547,6 +682,23 @@ class ClipItem(QGraphicsRectItem):
                 'Scale to Frame Size'
             )
 
+        # Cross dissolve at whichever end of this clip meets another
+        act_dissolve = None
+        act_remove_dissolve = None
+        if self.clip.has_video:
+            cut = self._nearest_cut(event.pos())
+            existing = self._transition_at(cut) if cut is not None else None
+            menu.addSeparator()
+            if existing is not None:
+                act_remove_dissolve = menu.addAction(
+                    'Remove Cross Dissolve')
+            elif cut is not None:
+                act_dissolve = menu.addAction('Add Cross Dissolve...')
+            else:
+                a = menu.addAction('Add Cross Dissolve...')
+                a.setEnabled(False)
+                a.setToolTip('Needs another clip butted against this one')
+
         menu.addSeparator()
 
         # Synchronize — only when 2+ audio clips selected
@@ -603,6 +755,12 @@ class ClipItem(QGraphicsRectItem):
             )
             self._refresh_linked_visuals()
             main.status_label.setText('Unlinked')
+
+        elif act_dissolve and action == act_dissolve:
+            self._add_dissolve(self._nearest_cut(event.pos()))
+
+        elif act_remove_dissolve and action == act_remove_dissolve:
+            self._remove_dissolve(self._nearest_cut(event.pos()))
 
         elif act_scale and action == act_scale:
             seq = main.project.active_sequence

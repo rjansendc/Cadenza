@@ -93,6 +93,16 @@ def _serialize_sequence(seq) -> dict:
             'sample_rate':    seq.settings.sample_rate,
             'audio_channels': seq.settings.audio_channels,
         },
+        'transitions': [
+            {
+                'id':           tr.id,
+                'kind':         tr.kind,
+                'track':        tr.track,
+                'center_frame': tr.center_frame,
+                'duration':     tr.duration,
+            }
+            for tr in getattr(seq, 'transitions', [])
+        ],
         'video_tracks': [
             _serialize_track(t)
             for t in seq.video_tracks
@@ -235,6 +245,18 @@ def _deserialize_project(data: dict,
             seq.video_tracks = video_tracks
         if audio_tracks:
             seq.audio_tracks = audio_tracks
+
+        from core.transition import Transition
+        seq.transitions = [
+            Transition(
+                track=tr.get('track', 0),
+                center_frame=tr.get('center_frame', 0),
+                duration=tr.get('duration', 30),
+                kind=tr.get('kind', 'cross_dissolve'),
+                id=tr.get('id', str(uuid.uuid4())),
+            )
+            for tr in seq_data.get('transitions', [])
+        ]
 
         project.sequences = {seq.id: seq}
         project.active_sequence_id = seq.id

@@ -46,6 +46,9 @@ class Compositor:
         # and stacked angles pay that per clip. PyAV releases the GIL
         # while decoding, so fetching them at once overlaps the work.
         self._decode_pool = None
+        # clips currently inside a dissolve: they must not be
+        # treated as hiding whatever is under them
+        self._in_transition = set()
 
         self._blank = torch.zeros(
             self.height, self.width, 3,
@@ -180,11 +183,28 @@ class Compositor:
             self._clips_hash = clips_hash
             self._frame_cache.clear()
 
-        # filter to active renderers at this frame
-        active = [
-            r for r in self._renderers
-            if r.is_active_at(playhead_frame)
-        ]
+        transitions = list(getattr(sequence, 'transitions', []) or [])
+
+        # filter to active renderers at this frame. A dissolve keeps
+        # the outgoing clip on screen past its own end and brings the
+        # incoming one in early, so they overlap for its duration.
+        active = []
+        alphas = {}
+        for r in self._renderers:
+            if r.is_active_at(playhead_frame):
+                active.append(r)
+                alpha = self._transition_alpha(
+                    r, playhead_frame, transitions)
+                if alpha is not None:
+                    alphas[id(r)] = alpha
+            else:
+                alpha = self._transition_alpha(
+                    r, playhead_frame, transitions)
+                if alpha is not None:
+                    active.append(r)
+                    alphas[id(r)] = alpha
+
+        self._in_transition = set(alphas.keys())
 
         if not active:
             return self._blank.clone()
@@ -193,10 +213,12 @@ class Compositor:
         # bottom clip is usually opaque and replaces it outright.
         canvas = None
 
-        # composite bottom to top (V1 first = lowest)
+        # composite bottom to top (V1 first = lowest), and within a
+        # track the later clip last, so a dissolve mixes the incoming
+        # picture over the outgoing one
         active_sorted = sorted(
             active,
-            key=lambda r: r.clip.track
+            key=lambda r: (r.clip.track, r.clip.start_frame)
         )
 
         # Cutting between camera angles stacks full-frame clips, and
@@ -236,6 +258,9 @@ class Compositor:
 
                 # opacity from ClipRenderer (local frame)
                 opacity = renderer.get_opacity_at(playhead_frame)
+                ramp = alphas.get(id(renderer))
+                if ramp is not None:
+                    opacity *= ramp
 
                 if opacity >= 1.0:
                     canvas = frame_tensor
@@ -328,6 +353,31 @@ class Compositor:
                 for r in renderers
             }
 
+    def _transition_alpha(self, renderer, playhead_frame: int,
+                           transitions) -> Optional[float]:
+        """
+        This clip's share of a dissolve at this frame, or None when no
+        transition touches it.
+
+        The outgoing clip stays fully opaque and the incoming one rises
+        from nothing — drawn in that order, that is a cross dissolve.
+        """
+        if not transitions:
+            return None
+        from core.transition import find_at
+
+        clip = renderer.clip
+        tr = find_at(transitions, clip.track, playhead_frame)
+        if tr is None:
+            return None
+
+        clip_end = clip.start_frame + clip.duration
+        if clip_end == tr.center_frame:              # outgoing
+            return 1.0
+        if clip.start_frame == tr.center_frame:      # incoming
+            return tr.progress_at(playhead_frame)
+        return None
+
     def _covers_canvas(self, renderer, playhead_frame: int) -> bool:
         """
         Does this clip fill the whole frame, opaque, with nothing
@@ -336,6 +386,9 @@ class Compositor:
         """
         try:
             if renderer.get_opacity_at(playhead_frame) < 0.999:
+                return False
+            if getattr(self, '_in_transition', set()) and \
+                    id(renderer) in self._in_transition:
                 return False
 
             m = renderer.get_motion_at(playhead_frame)
