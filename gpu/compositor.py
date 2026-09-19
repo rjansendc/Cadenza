@@ -424,6 +424,11 @@ class Compositor:
         crop_b = max(0.0, min(100.0, motion.get('crop_bottom') or 0.0)) / 100.0
         has_crop = (crop_l or crop_r or crop_t or crop_b)
 
+        # dimensions as decoded, before cropping: the anchor is
+        # expressed against the whole source
+        frame_h_full = frame.shape[0]
+        frame_w_full = frame.shape[1]
+
         crop_off_x = 0.0
         crop_off_y = 0.0
         if has_crop:
@@ -489,9 +494,17 @@ class Compositor:
         new_h = max(1, int(src_h * scale_h))
         new_w = max(1, int(src_w * scale_w))
 
+        # Anti-flicker: shrinking with plain bilinear samples every
+        # Nth pixel, so fine detail — a striped shirt, distant railings
+        # — shimmers as the picture moves. Filtering across the pixels
+        # being dropped is what removes it, at a little softness.
+        anti_flicker = motion.get('anti_flicker') or 0.0
+        smooth = (anti_flicker > 0.0 and
+                  (new_w < frame.shape[1] or new_h < frame.shape[0]))
         t = F.interpolate(
             t, size=(new_h, new_w),
-            mode='bilinear', align_corners=False
+            mode='bilinear', align_corners=False,
+            antialias=bool(smooth)
         )
 
         if abs(rotation) > 0.01:
@@ -524,8 +537,38 @@ class Compositor:
             dtype=torch.float32, device='cuda'
         )
 
-        cx = int(round(pos_x + crop_off_x * scale_w))
-        cy = int(round(pos_y + crop_off_y * scale_h))
+        # Anchor point: the spot in the source that sits at Position,
+        # and that rotation turns around. Stored in ORIGINAL source
+        # pixels, so a proxy frame has to be measured in those terms.
+        ss = src_scale if src_scale else 1.0
+        orig_w = frame_w_full * ss
+        orig_h = frame_h_full * ss
+
+        anchor_x = motion.get('anchor_x')
+        anchor_y = motion.get('anchor_y')
+        # Unset means centre. Each axis independently: fixing one of
+        # them must never move the other, which is what special-casing
+        # the 960x540 pair used to do.
+        if anchor_x is None:
+            anchor_x = orig_w / 2.0
+        if anchor_y is None:
+            anchor_y = orig_h / 2.0
+
+        # vector from the anchor to the middle of the picture. scale_w
+        # already carries the proxy factor, so take it back out to work
+        # in original source pixels.
+        off_x = (orig_w / 2.0 - anchor_x) * (scale_w / ss)
+        off_y = (orig_h / 2.0 - anchor_y) * (scale_h / ss)
+        if abs(rotation) > 0.01 and (off_x or off_y):
+            import math as _math
+            a = _math.radians(-rotation)
+            off_x, off_y = (
+                off_x * _math.cos(a) - off_y * _math.sin(a),
+                off_x * _math.sin(a) + off_y * _math.cos(a),
+            )
+
+        cx = int(round(pos_x + crop_off_x * scale_w + off_x))
+        cy = int(round(pos_y + crop_off_y * scale_h + off_y))
         x1 = cx - new_w // 2
         y1 = cy - new_h // 2
         x2 = x1 + new_w

@@ -172,3 +172,102 @@ def test_setting_a_value_back_returns_to_default():
     assert not motion.is_at_defaults()
     motion.set('scale', default)
     assert motion.is_at_defaults()
+
+
+# ── anchor point ──────────────────────────────────────────────────
+
+def anchor_offset(orig_w, anchor_x, user_scale, geom_scale=1.0,
+                   src_scale=1.0):
+    """The placement maths from Compositor._apply_motion."""
+    scale_w = user_scale * geom_scale * src_scale
+    return (orig_w / 2.0 - anchor_x) * (scale_w / src_scale)
+
+
+def test_centre_anchor_does_not_move_the_picture():
+    assert anchor_offset(1920, 960, 1.0) == 0.0
+    assert anchor_offset(3840, 1920, 0.5) == 0.0
+
+
+def test_anchor_left_edge_pushes_the_picture_right():
+    # anchoring the left edge at Position puts the whole image to its
+    # right, so the centre moves right by half the scaled width
+    assert anchor_offset(1920, 0, 1.0) == 960.0
+    assert anchor_offset(1920, 0, 0.5) == 480.0
+
+
+def test_anchor_is_unaffected_by_proxy_scale():
+    """A proxy frame stands in for the source; framing must not change."""
+    full  = anchor_offset(3840, 1000, 0.5, src_scale=1.0)
+    proxy = anchor_offset(3840, 1000, 0.5, src_scale=4.0)
+    assert abs(full - proxy) < 1e-9
+
+
+def test_anchor_follows_preview_quality():
+    full = anchor_offset(1920, 0, 1.0, geom_scale=1.0)
+    half = anchor_offset(1920, 0, 1.0, geom_scale=0.5)
+    assert abs(half * 2 - full) < 1e-9
+
+
+def test_motion_centres_the_anchor_for_its_source():
+    from core.effects import EffectRegistry
+    motion = EffectRegistry.get('motion')()
+    motion.centre_anchor(3840, 2160)
+    assert motion.get('anchor_x') == 1920.0
+    assert motion.get('anchor_y') == 1080.0
+
+
+def test_scale_to_frame_also_centres_the_anchor():
+    from core.clip import Clip, ClipType
+    clip = Clip(filepath='x.mp4', clip_type=ClipType.VIDEO,
+                source_width=3840, source_height=2160)
+    clip.scale_to_frame(1920, 1080)
+    motion = clip.get_effect('motion')
+    assert motion.get('scale') == 50.0
+    assert (motion.get('anchor_x'), motion.get('anchor_y')) == (1920.0, 1080.0)
+
+
+def test_anchor_migration_fixes_4k_clips():
+    from core.clip import Clip, ClipType
+    clip = Clip(filepath='x.mp4', clip_type=ClipType.VIDEO,
+                source_width=3840, source_height=2160)
+    motion = clip.get_effect('motion')
+    motion.set('anchor_x', 960.0)      # the old default
+    motion.set('anchor_y', 540.0)
+
+    clip.migrate_anchor()
+    assert (motion.get('anchor_x'), motion.get('anchor_y')) == (1920.0, 1080.0)
+
+
+def test_migration_leaves_1080p_clips_alone():
+    from core.clip import Clip, ClipType
+    clip = Clip(filepath='x.mp4', clip_type=ClipType.VIDEO,
+                source_width=1920, source_height=1080)
+    motion = clip.get_effect('motion')
+    clip.migrate_anchor()
+    assert (motion.get('anchor_x'), motion.get('anchor_y')) == (960.0, 540.0)
+
+
+def test_migration_respects_a_deliberate_anchor():
+    from core.clip import Clip, ClipType
+    clip = Clip(filepath='x.mp4', clip_type=ClipType.VIDEO,
+                source_width=3840, source_height=2160)
+    motion = clip.get_effect('motion')
+    motion.set('anchor_x', 100.0)
+    motion.set('anchor_y', 200.0)
+    clip.migrate_anchor()
+    assert (motion.get('anchor_x'), motion.get('anchor_y')) == (100.0, 200.0)
+
+
+def test_changing_one_axis_does_not_move_the_other():
+    """The bug: editing Anchor X also shifted the picture vertically."""
+    from core.clip import Clip, ClipType
+    clip = Clip(filepath='x.mp4', clip_type=ClipType.VIDEO,
+                source_width=3840, source_height=2160)
+    clip.scale_to_frame(1920, 1080)
+    motion = clip.get_effect('motion')
+
+    before_y = motion.get('anchor_y')
+    motion.set('anchor_x', 0.0)
+    assert motion.get('anchor_y') == before_y == 1080.0
+    # and the vertical offset stays zero
+    assert anchor_offset(2160, motion.get('anchor_y'), 0.5) == 0.0

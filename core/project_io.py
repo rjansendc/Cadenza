@@ -313,6 +313,10 @@ def _deserialize_clip(data: dict) -> 'Clip':
         for name, value in (eff_data.get('params') or {}).items():
             eff.set(name, value)
 
+    # projects saved before the anchor did anything carry 960x540,
+    # which is only the centre of a 1080p source
+    clip.migrate_anchor()
+
     # restore envelopes
     for key, env_data in data.get(
         'envelopes', {}

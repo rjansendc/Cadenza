@@ -435,6 +435,7 @@ class FCPXMLImporter:
         if motion is not None and is_video:
             motion.set('scale',
                        self._fit_percent(clip, canvas_w, canvas_h))
+            motion.centre_anchor(clip.source_width, clip.source_height)
 
         self._apply_filters(clip, ci, canvas_w, canvas_h, clip.name)
 

@@ -233,7 +233,7 @@ class ParameterWidget(QWidget):
                 border-radius: 8px;
             }
         """)
-        reset_btn.setToolTip(f"Reset to {self.param_def.default}")
+        reset_btn.setToolTip(f"Reset to {self._default_value()}")
         reset_btn.clicked.connect(self._reset_value)
         layout.addWidget(reset_btn)
         
@@ -558,9 +558,26 @@ class ParameterWidget(QWidget):
         # Emit signal for preview update
         self.value_changed.emit(self.param_def.name, value)
     
+    def _default_value(self):
+        """
+        The value reset should restore.
+
+        ParamDef defaults are fixed numbers, which is wrong for
+        anything measured in source pixels: Anchor defaults to 960x540,
+        the centre of a 1080p frame only, so resetting it on a 4K clip
+        used to move the picture rather than restore it.
+        """
+        name = self.param_def.name
+        if self.clip is not None and self.effect.id == 'motion':
+            if name == 'anchor_x' and self.clip.source_width:
+                return self.clip.source_width / 2.0
+            if name == 'anchor_y' and self.clip.source_height:
+                return self.clip.source_height / 2.0
+        return self.param_def.default
+
     def _reset_value(self):
         """Reset parameter to default value."""
-        default = self.param_def.default
+        default = self._default_value()
         self.effect.set(self.param_def.name, default)
         self._update_from_effect()
         self.value_changed.emit(self.param_def.name, default)

@@ -57,6 +57,18 @@ class MotionEffect(EffectBase):
     # effect by id. Inheriting the base passthrough keeps it harmless
     # if anything ever does call it.
 
+    def centre_anchor(self, clip_w, clip_h):
+        """
+        Anchor defaults to the middle of the source.
+
+        The ParamDef default is 960x540 — right for 1080p, wrong for
+        anything else — so it is set per clip once the source size is
+        known. The compositor also treats a stored 960x540 as "centre"
+        so projects saved before the anchor did anything do not shift.
+        """
+        self.set('anchor_x', clip_w / 2.0)
+        self.set('anchor_y', clip_h / 2.0)
+
     def scale_to_frame(self, clip_w, clip_h, 
                         canvas_w, canvas_h):
         """Fit inside canvas preserving aspect ratio."""
@@ -65,6 +77,7 @@ class MotionEffect(EffectBase):
         self.set('scale', scale)
         self.set('position_x', canvas_w / 2)
         self.set('position_y', canvas_h / 2)
+        self.centre_anchor(clip_w, clip_h)
 
     def fit_to_frame(self, clip_w, clip_h,
                      canvas_w, canvas_h):
