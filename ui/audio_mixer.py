@@ -46,6 +46,8 @@ class AudioMixer(threading.Thread):
         # chunk — five audible ticks a second. Keep the exact position
         # here and let _mix_frame remain the integer video syncs to.
         self._mix_frame_exact = 0.0
+        self._prof_mix = 0.0
+        self._prof_chunks = 0
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
 
@@ -132,8 +134,32 @@ class AudioMixer(threading.Thread):
                 continue
 
             if self.ring.available < self._low_samples:
+                import os
+                import time as _time
+                profile = os.environ.get('CADENZA_PROFILE') == '1'
+                t0 = _time.perf_counter() if profile else 0.0
+
                 chunk  = self._mix_chunk(self._mix_frame_exact,
                                           self._chunk_samples)
+
+                if profile:
+                    self._prof_mix += _time.perf_counter() - t0
+                    self._prof_chunks += 1
+                    if self._prof_chunks >= 25:
+                        n = self._prof_chunks
+                        with self._clips_lock:
+                            active = sum(
+                                1 for r in self._renderers
+                                if r.is_active_at(int(self._mix_frame)))
+                        print(f"[audio] mix "
+                              f"{self._prof_mix / n * 1000:6.1f} ms per "
+                              f"{MIX_CHUNK_SECONDS * 1000:.0f} ms chunk | "
+                              f"{active} sources | buffer "
+                              f"{self.ring.available_seconds:.2f}s",
+                              flush=True)
+                        self._prof_mix = 0.0
+                        self._prof_chunks = 0
+
                 written = self.ring.write(chunk)
                 if written > 0:
                     self._mix_frame_exact += (
