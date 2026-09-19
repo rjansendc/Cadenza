@@ -26,9 +26,18 @@ the same way. If Premiere's importer instead reads scale as a
 percentage of native size, the two disagree and a 4K clip lands at
 double or half.
 
+Evidence so far: a sequence of 1080p clips exports and opens correctly,
+while the mixed 4K/HD project does not. That fits — a 1080p source in a
+1080p sequence has a fit factor of 100, so the conversion is the
+identity and cannot be wrong. Only 4K clips, fit 50, exercise it.
+
 The way to settle it: export a single 4K clip at a known Scale, open it
-in Premiere, and read the Scale that Motion shows. Then compare that
-against what Premiere writes for the same framing in its own export.
+in Premiere, and read the Scale that Motion shows.
+  - shows 100 and frames correctly -> Premiere applied its own
+    set-to-frame and our fit-relative conversion is right
+  - shows 100 but zoomed 2x -> Premiere reads scale against native
+    pixels, and export should write clip scale directly, with import
+    adjusted to match
 """
 
 from __future__ import annotations
