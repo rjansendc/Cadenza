@@ -95,16 +95,25 @@ def bench_decoders(project, start: int, frames: int):
 
 
 def bench_hw_vs_sw(path: str, start: int, frames: int):
-    """Time one file decoded on the GPU against the CPU."""
+    """
+    Time one file three ways: software, plain NVDEC, and NVDEC
+    decoding straight to preview size. Sequential decode first, then
+    random seeks — which is what scrubbing actually does.
+    """
     import os
+    import random
     from media.decoder import VideoDecoder
 
     print(f"\n{os.path.basename(path)}")
+    print("  sequential decode")
     results = {}
-    for label, env in (('GPU (NVDEC)', '1'), ('CPU (software)', '0')):
+    for label, env in (('NVDEC scaled', 'scaled'),
+                       ('GPU (NVDEC)', '1'),
+                       ('CPU (software)', '0')):
         os.environ['CADENZA_HWDECODE'] = env
         try:
-            dec = VideoDecoder(path)
+            dec = VideoDecoder(path, use_proxy=False)
+            dec.set_output_size(960, 540)
             dec.get_frame(start)           # open + seek + warm up
             used = 'yes' if getattr(dec, 'hardware_decode', False) else 'no'
             t0 = time.perf_counter()
@@ -113,17 +122,36 @@ def bench_hw_vs_sw(path: str, start: int, frames: int):
             elapsed = time.perf_counter() - t0
             fps = frames / elapsed if elapsed else 0.0
             results[label] = fps
+            size = f"{dec.width}x{dec.height}"
             print(f"  {label:<16} {fps:7.1f} fps   "
                   f"{elapsed / frames * 1000:5.1f} ms/frame   "
-                  f"hardware: {used}")
+                  f"hardware: {used:<3} {size}")
+        except Exception as e:
+            print(f"  {label:<16} failed: {e}")
+
+    # random seeks: this is what dragging the playhead costs
+    print("\n  random seeks (what scrubbing does)")
+    for label, env in (('NVDEC scaled', 'scaled'),
+                       ('CPU (software)', '0')):
+        os.environ['CADENZA_HWDECODE'] = env
+        try:
+            dec = VideoDecoder(path, use_proxy=False)
+            dec.set_output_size(960, 540)
+            random.seed(7)
+            targets = [random.randint(60, max(120, dec.frame_count - 60))
+                       for _ in range(8)]
+            dec.get_frame(targets[0])
+            t0 = time.perf_counter()
+            for f in targets:
+                dec.get_frame(f)
+                dec._cached_frame_idx = -1
+                dec._last_frame_idx = -1
+                dec._frame_lru.clear()
+            ms = (time.perf_counter() - t0) / len(targets) * 1000
+            print(f"  {label:<16} {ms:7.1f} ms per seek")
         except Exception as e:
             print(f"  {label:<16} failed: {e}")
     os.environ.pop('CADENZA_HWDECODE', None)
-
-    if len(results) == 2:
-        gpu, cpu = results['GPU (NVDEC)'], results['CPU (software)']
-        if cpu:
-            print(f"  -> {gpu / cpu:.2f}x")
     return results
 
 

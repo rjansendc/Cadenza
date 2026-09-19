@@ -47,7 +47,7 @@ def test_an_encoder_is_available():
     assert pick_encoder() in available_encoders()
 
 
-def test_generated_proxy_is_all_intra(tmp_path):
+def test_generated_proxy_seeks_cheaply(tmp_path):
     if not os.path.exists(SAMPLE):
         pytest.skip('test_media/Test_36.mp4 not present')
     out = proxy_path(SAMPLE)
@@ -58,7 +58,9 @@ def test_generated_proxy_is_all_intra(tmp_path):
     stream = container.streams.video[0]
     assert stream.codec_context.height == DEFAULT_HEIGHT
 
-    # every frame a keyframe is what makes seeking cheap
+    # frequent keyframes are what make seeking cheap: at most a
+    # short GOP of small frames to decode, against a whole GOP of 4K
+    from core.proxy import DEFAULT_GOP
     keyframes = 0
     total = 0
     for packet in container.demux(stream):
@@ -67,10 +69,10 @@ def test_generated_proxy_is_all_intra(tmp_path):
         total += 1
         if packet.is_keyframe:
             keyframes += 1
-        if total >= 40:
+        if total >= 60:
             break
     container.close()
-    assert keyframes == total
+    assert keyframes >= total // (DEFAULT_GOP + 1)
 
 
 def test_decoder_prefers_the_proxy():

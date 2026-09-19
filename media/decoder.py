@@ -48,6 +48,12 @@ class VideoDecoder:
         # repeatedly on every parameter change. Return instantly.
         self._cached_frame_idx: int = -1
         self._cached_frame_tensor = None
+        # Recently decoded frames, newest last. Dragging the playhead
+        # back over ground already covered then costs nothing, which
+        # is most of what scrubbing actually does.
+        from collections import OrderedDict
+        self._frame_lru = OrderedDict()
+        self._lru_size = 12
         self._init_metadata()
 
     def _init_metadata(self):
@@ -100,11 +106,24 @@ class VideoDecoder:
         the software path.
         """
         import os
-        # Off by default: measured on a 3090 Ti, NVDEC decoded 4K at
-        # 150 fps against 188 fps in software, because PyAV downloads
-        # every frame to system memory anyway. Set CADENZA_HWDECODE=1
-        # to try it on other hardware.
-        if os.environ.get('CADENZA_HWDECODE', '0') != '1':
+        # Plain NVDEC is a loss: measured 150 fps against 188 in
+        # software, because PyAV copies every frame back to system
+        # memory anyway. It wins when it also DOWNSCALES, since then
+        # only a small frame crosses the bus — the same trick the
+        # proxy generator uses, but with no transcode first.
+        # Measured on a 3090 Ti with 4K H.264: software 162 fps
+        # sequential and 89ms per seek; NVDEC 153 fps; NVDEC decoding
+        # straight to 540p 175 fps but 102ms per seek. Scrubbing is
+        # seeks, so software wins where it matters. CADENZA_HWDECODE
+        # can be 'scaled' or '1' to try the others.
+        mode = os.environ.get('CADENZA_HWDECODE', '0')
+        if mode == '0':
+            return None
+        want_resize = (mode == 'scaled'
+                       and getattr(self, '_out_w', 0) > 0
+                       and getattr(self, '_out_h', 0) > 0
+                       and self.width > self._out_w * 1.5)
+        if mode == 'scaled' and not want_resize:
             return None
         try:
             if not torch.cuda.is_available():
@@ -116,6 +135,14 @@ class VideoDecoder:
             codec = av.codec.Codec(hw_name, 'r')
             ctx = codec.create()
             ctx.extradata = stream.codec_context.extradata
+            if want_resize:
+                # decode straight to preview size: the GOP is still
+                # walked, but on the video engine, and a 540p frame
+                # comes back instead of a 24MB 4K one
+                w = self._out_w - (self._out_w % 2)
+                h = self._out_h - (self._out_h % 2)
+                ctx.options = {'resize': f'{w}x{h}'}
+                self.decoded_width, self.decoded_height = w, h
             return ctx
         except Exception as e:
             print(f"NVDEC unavailable for {self.path.name}: {e}")
@@ -167,6 +194,11 @@ class VideoDecoder:
         if frame_index == self._cached_frame_idx                 and self._cached_frame_tensor is not None:
             return self._cached_frame_tensor
 
+        cached = self._frame_lru.get(frame_index)
+        if cached is not None:
+            self._frame_lru.move_to_end(frame_index)
+            return cached
+
         with self._lock:
             # Double-check inside lock
             if frame_index == self._cached_frame_idx                     and self._cached_frame_tensor is not None:
@@ -185,6 +217,7 @@ class VideoDecoder:
                 if not draft:
                     self._cached_frame_idx = frame_index
                     self._cached_frame_tensor = result
+                    self._remember(frame_index, result)
                 return result
             except Exception as e:
                 print(f"Frame error {frame_index}: {e}")
@@ -196,6 +229,13 @@ class VideoDecoder:
                     return result
                 except Exception:
                     return self._blank_frame()
+
+    def _remember(self, frame_index: int, tensor):
+        """Keep the most recent frames for revisits while scrubbing."""
+        self._frame_lru[frame_index] = tensor
+        self._frame_lru.move_to_end(frame_index)
+        while len(self._frame_lru) > self._lru_size:
+            self._frame_lru.popitem(last=False)
 
     def _next_frames(self, target_idx: int,
                      delta: int) -> torch.Tensor:
@@ -297,11 +337,18 @@ class VideoDecoder:
         self._decode_gen = None
         return self._frame_to_tensor(best)
 
-    def set_output_size(self, width: int,
-                         height: int):
-        """Set target output size for pre-scaling."""
+    def set_output_size(self, width: int, height: int):
+        """
+        Preview size. When NVDEC is in use it decodes straight to this
+        size, so the container is reopened to pick it up.
+        """
+        if (width, height) == (getattr(self, '_out_w', 0),
+                                getattr(self, '_out_h', 0)):
+            return
         self._out_w = width
         self._out_h = height
+        with self._lock:
+            self._close_container()
 
     def _frame_to_tensor(self,
                           frame) -> torch.Tensor:
@@ -339,6 +386,10 @@ class VideoDecoder:
             pass
         self._hw_ctx              = None
         self.hardware_decode      = False
+        try:
+            self._frame_lru.clear()
+        except AttributeError:
+            pass
         self._container           = None
         self._video_stream        = None
         self._decode_gen          = None

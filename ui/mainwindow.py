@@ -615,10 +615,43 @@ class MainWindow(QMainWindow):
             import os
             draft = (os.environ.get('CADENZA_DRAFT_SCRUB') == '1'
                      and getattr(self.app_state, 'scrubbing', False))
-            worker.request(frame, draft=draft)
+            worker.request(self._scrub_target(frame), draft=draft)
 
         if self._playback:
             self._playback.seek(frame)
+
+    def _scrub_target(self, frame: int) -> int:
+        """
+        Round the requested frame to a grid while dragging fast.
+
+        A 4K seek costs about 160ms, so a quick drag asks for far more
+        frames than can be made. Snapping to every Nth frame — N grows
+        with how fast the mouse is moving — means repeated passes over
+        the same stretch land on the same frames, which the decoder
+        then has cached. Slow, careful dragging still gets every frame.
+        """
+        import time
+        if not getattr(self.app_state, 'scrubbing', False):
+            self._scrub_last = None
+            return frame
+
+        now = time.perf_counter()
+        last = getattr(self, '_scrub_last', None)
+        self._scrub_last = (frame, now)
+        if last is None:
+            return frame
+
+        last_frame, last_time = last
+        dt = max(1e-3, now - last_time)
+        frames_per_second = abs(frame - last_frame) / dt
+
+        # a leisurely drag (under ~150 frames/s) stays exact; a fast
+        # one snaps to a coarser grid rather than queueing work that
+        # will be superseded anyway
+        if frames_per_second < 150:
+            return frame
+        step = int(min(48, max(2, frames_per_second / 60)))
+        return (frame // step) * step
 
     def _ensure_scrub_worker(self):
         """The thread that renders scrub frames, started on demand."""
