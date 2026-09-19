@@ -44,3 +44,8 @@ build/*
 build
 # Debugging screenshots shared during development
 screenshots/
+
+# Local ffmpeg binary — too big for git, install it system-wide instead
+ffmpeg.exe
+ffprobe.exe
+*.exe
