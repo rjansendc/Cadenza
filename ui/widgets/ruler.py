@@ -30,6 +30,13 @@ class Ruler(QWidget):
         self.setFixedHeight(self.HEIGHT)
         self.setMouseTracking(True)
 
+        # The track canvases sit inside a scroll area whose vertical
+        # scrollbar takes a few pixels off their width. The ruler has
+        # no scrollbar, so mapping frames with its own width puts the
+        # marker a few pixels right of the line through the tracks.
+        # The panel tells us the canvases' width instead.
+        self.content_width = 0
+
         # connect to zoom/playhead changes → repaint
         # use named methods so we can disconnect cleanly
         self.app_state.zoom_changed.connect(
@@ -140,7 +147,7 @@ class Ruler(QWidget):
                 continue
 
             px = self.app_state.frame_to_pixel(
-                frame, float(w)
+                frame, self._content_width()
             )
             if px < 0 or px > w:
                 continue
@@ -178,7 +185,7 @@ class Ruler(QWidget):
 
         # --- playhead marker ---
         ph_px = self.app_state.frame_to_pixel(
-            self.app_state.playhead_frame, float(w)
+            self.app_state.playhead_frame, self._content_width()
         )
         if 0 <= ph_px <= w:
             painter.setPen(
@@ -232,9 +239,13 @@ class Ruler(QWidget):
                 self.app_state.playhead_frame)
         super().mouseReleaseEvent(event)
 
+    def _content_width(self) -> float:
+        """Width the tracks use, so ruler and tracks agree."""
+        return float(self.content_width or self.width())
+
     def _set_playhead_from_mouse(self, x: float):
         frame = self.app_state.pixel_to_frame(
-            x, float(self.width())
+            x, self._content_width()
         )
         frame = max(0, min(
             frame, self.app_state.total_frames

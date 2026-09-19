@@ -113,6 +113,11 @@ class TimelinePanel(QWidget):
 
         self.ruler = Ruler(self.app_state, fps)
         ruler_row.addWidget(self.ruler)
+
+        # matching gap where the tracks' scrollbar sits
+        self._ruler_gutter = QWidget()
+        self._ruler_gutter.setStyleSheet('background-color:#141414;')
+        ruler_row.addWidget(self._ruler_gutter)
         layout.addLayout(ruler_row)
 
         # ── Scroll area ───────────────────────────────────
@@ -120,8 +125,13 @@ class TimelinePanel(QWidget):
         self._scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
+        # Always on: with AsNeeded, the scrollbar appears the moment
+        # there are enough tracks and silently narrows every canvas.
+        # The ruler has no scrollbar, so the playhead marker and the
+        # playhead line then disagree by its width. Reserving the space
+        # keeps both at one width whatever the track count.
         self._scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(
@@ -377,6 +387,44 @@ class TimelinePanel(QWidget):
                 row.canvas.remove_clip(clip_id)
                 return
 
+    def _sync_ruler_gutter(self):
+        """Make the ruler's right gap exactly the scrollbar's width."""
+        if not hasattr(self, '_ruler_gutter'):
+            return
+        bar = self._scroll.verticalScrollBar()
+        width = bar.sizeHint().width() if bar else 0
+        if width and self._ruler_gutter.width() != width:
+            self._ruler_gutter.setFixedWidth(width)
+
+    def _sync_ruler_width(self):
+        """
+        Tell the ruler how wide the track canvases actually are.
+
+        The scroll area's vertical scrollbar appears once there are
+        enough tracks, narrowing the canvases but not the ruler — which
+        is what made the playhead marker sit a few pixels right of the
+        playhead line.
+        """
+        if not hasattr(self, 'ruler') or not self._rows:
+            return
+        for row in self._rows.values():
+            width = row.canvas.viewport().width()
+            if width > 0:
+                if self.ruler.content_width != width:
+                    self.ruler.content_width = width
+                    self.ruler.update()
+                return
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_ruler_gutter()
+        self._sync_ruler_width()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_ruler_gutter()
+        self._sync_ruler_width()
+
     def _on_clip_modified(self, clip_id: str = None):
         """Repaint one clip — keyframe markers, envelope, colours."""
         for row in self._rows.values():
@@ -419,6 +467,11 @@ class TimelinePanel(QWidget):
             # If total shrank significantly, reset view
             if max_end < old_total * 0.9:
                 self.app_state.set_view(0.0, 1.0)
+
+        # a new row count can add or remove the scrollbar, which
+        # changes how wide the canvases are
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._sync_ruler_width)
 
     def get_all_clip_items(self):
         """Return all ClipItem objects across all canvases."""
