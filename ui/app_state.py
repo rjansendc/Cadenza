@@ -22,6 +22,9 @@ class AppState(QObject):
 
         # --- playhead ---
         self._playhead_frame: int = 0
+        # True while the playhead is being dragged: frames are drawn
+        # from the nearest keyframe so the picture follows the mouse
+        self.scrubbing: bool = False
 
         # --- selection ---
         self._selected_clip_ids: List[str] = []

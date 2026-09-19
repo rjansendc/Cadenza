@@ -62,6 +62,27 @@ class EffectBase:
         """
         return []
 
+    def is_at_defaults(self) -> bool:
+        """
+        True when every parameter still holds its default.
+
+        The compositor uses this to skip an effect entirely: running a
+        no-op Lumetri still costs four full-frame conversions per clip
+        per frame, and every clip carries one.
+        """
+        for p in self.param_defs():
+            current = self._params.get(p.name, p.default)
+            if isinstance(current, float) or isinstance(p.default, float):
+                try:
+                    if abs(float(current) - float(p.default)) > 1e-9:
+                        return False
+                    continue
+                except (TypeError, ValueError):
+                    pass
+            if current != p.default:
+                return False
+        return True
+
     def apply_video(self, frame_tensor, params: Dict[str, Any]):
         """
         Process a video frame tensor.

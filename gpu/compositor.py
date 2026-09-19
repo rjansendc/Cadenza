@@ -22,6 +22,8 @@ class Compositor:
 
     def __init__(self, sequence: Sequence):
         self.sequence = sequence
+        # preview uses proxy media where it exists; export does not
+        self.use_proxies = True
         self.seq_width  = sequence.settings.width
         self.seq_height = sequence.settings.height
         self.width    = sequence.settings.width
@@ -49,6 +51,15 @@ class Compositor:
             self.height, self.width, 3,
             dtype=torch.uint8
         )
+
+    def set_use_proxies(self, enabled: bool):
+        """Switch between proxy and original media (export uses originals)."""
+        if enabled == self.use_proxies:
+            return
+        self.use_proxies = enabled
+        with self._decoder_lock:
+            self._decoders.clear()
+        self.invalidate_cache()
 
     def set_preview_size(self, width: int, height: int):
         """
@@ -89,7 +100,8 @@ class Compositor:
                 if is_image:
                     dec = ImageDecoder(filepath)
                 else:
-                    dec = VideoDecoder(filepath)
+                    dec = VideoDecoder(
+                        filepath, use_proxy=self.use_proxies)
                     dec.set_output_size(
                         self.width, self.height
                     )
@@ -104,6 +116,7 @@ class Compositor:
                          playhead_frame: int,
                          sequence=None,
                          use_cache: bool = False,
+                         draft: bool = False,
                          keep_on_gpu: bool = False
                          ) -> torch.Tensor:
         # Cache is opt-in — only playback uses it.
@@ -113,7 +126,7 @@ class Compositor:
             return self._frame_cache[playhead_frame]
 
         result = self._composite_internal(
-            clips, playhead_frame, sequence
+            clips, playhead_frame, sequence, draft=draft
         )
 
         if use_cache:
@@ -134,7 +147,8 @@ class Compositor:
     def _composite_internal(self,
                               clips: List[Clip],
                               playhead_frame: int,
-                              sequence=None
+                              sequence=None,
+                              draft: bool = False
                               ) -> torch.Tensor:
         """
         Composite all active video clips.
@@ -175,12 +189,9 @@ class Compositor:
         if not active:
             return self._blank.clone()
 
-        # black canvas on GPU
-        canvas = torch.zeros(
-            self.height, self.width, 3,
-            dtype=torch.float32,
-            device='cuda'
-        )
+        # The canvas is only needed if something shows through: the
+        # bottom clip is usually opaque and replaces it outright.
+        canvas = None
 
         # composite bottom to top (V1 first = lowest)
         active_sorted = sorted(
@@ -197,7 +208,8 @@ class Compositor:
                 active_sorted = active_sorted[i:]
                 break
 
-        frames = self._get_frames(active_sorted, playhead_frame)
+        frames = self._get_frames(
+            active_sorted, playhead_frame, draft=draft)
 
         for renderer in active_sorted:
             try:
@@ -205,10 +217,15 @@ class Compositor:
                 if frame_tensor is None:
                     continue
 
-                # apply motion using ClipRenderer
+                # apply motion using ClipRenderer. A proxy frame is
+                # smaller than the source the motion values refer to,
+                # so tell _apply_motion how much smaller.
                 motion = renderer.get_motion_at(playhead_frame)
+                src_w = renderer.clip.source_width or 0
+                src_scale = (src_w / frame_tensor.shape[1]
+                             if src_w and frame_tensor.shape[1] else 1.0)
                 frame_tensor = self._apply_motion(
-                    frame_tensor, motion
+                    frame_tensor, motion, src_scale
                 )
 
                 # apply video effect stack (lumetri color, etc.)
@@ -223,6 +240,12 @@ class Compositor:
                 if opacity >= 1.0:
                     canvas = frame_tensor
                 else:
+                    if canvas is None:
+                        canvas = torch.zeros(
+                            self.height, self.width, 3,
+                            dtype=torch.float32,
+                            device=frame_tensor.device
+                        )
                     canvas = (
                         canvas * (1.0 - opacity) +
                         frame_tensor * opacity
@@ -231,11 +254,14 @@ class Compositor:
                 import traceback; traceback.print_exc()
                 continue
 
+        if canvas is None:
+            return self._blank.clone()
         return canvas.clamp(0, 255).byte()
 
     def _get_frame(self,
                     renderer: ClipRenderer,
-                    playhead_frame: int
+                    playhead_frame: int,
+                    draft: bool = False
                     ) -> Optional[torch.Tensor]:
         """
         Decode source frame using ClipRenderer mapping.
@@ -256,7 +282,7 @@ class Compositor:
         )
 
         try:
-            frame = decoder.get_frame(source_frame)
+            frame = decoder.get_frame(source_frame, draft=draft)
             # decord may return numpy in worker threads
             # if torch bridge not set — convert defensively
             if not isinstance(frame, torch.Tensor):
@@ -270,7 +296,8 @@ class Compositor:
             print(f"Frame decode error: {e}")
             return None
 
-    def _get_frames(self, renderers, playhead_frame: int) -> dict:
+    def _get_frames(self, renderers, playhead_frame: int,
+                     draft: bool = False) -> dict:
         """
         Decode every clip needed for this frame, in parallel when
         there is more than one. Falls back to sequential decoding if
@@ -278,7 +305,7 @@ class Compositor:
         """
         if len(renderers) <= 1:
             return {
-                id(r): self._get_frame(r, playhead_frame)
+                id(r): self._get_frame(r, playhead_frame, draft=draft)
                 for r in renderers
             }
 
@@ -290,14 +317,14 @@ class Compositor:
                     thread_name_prefix='decode')
             futures = {
                 id(r): self._decode_pool.submit(
-                    self._get_frame, r, playhead_frame)
+                    self._get_frame, r, playhead_frame, draft)
                 for r in renderers
             }
             return {key: f.result() for key, f in futures.items()}
         except Exception as e:
             print(f"Parallel decode unavailable ({e}), falling back")
             return {
-                id(r): self._get_frame(r, playhead_frame)
+                id(r): self._get_frame(r, playhead_frame, draft=draft)
                 for r in renderers
             }
 
@@ -344,7 +371,8 @@ class Compositor:
 
     def _apply_motion(self,
                        frame: torch.Tensor,
-                       motion: dict
+                       motion: dict,
+                       src_scale: float = 1.0
                        ) -> torch.Tensor:
         """
         Apply motion to frame.
@@ -366,6 +394,12 @@ class Compositor:
             scale_h if uniform
             else (motion.get('scale_x') or 100.0) / 100.0
         )
+
+        # a proxy frame stands in for a larger source: scale up to
+        # the size the motion values assume
+        if src_scale and abs(src_scale - 1.0) > 1e-6:
+            scale_h *= src_scale
+            scale_w *= src_scale
 
         # preview quality: shrink the picture and its placement together
         gs = self.geom_scale
@@ -544,6 +578,13 @@ class Compositor:
             # Skip motion and opacity — handled separately
             if effect.id in ('motion', 'opacity', 'time_remap'):
                 continue
+            # an effect at its defaults changes nothing, but running it
+            # still costs two conversions of the whole frame each way
+            try:
+                if effect.is_at_defaults():
+                    continue
+            except Exception:
+                pass
             try:
                 params = effect.get_all()
                 # Convert to uint8 for apply_video, back to float

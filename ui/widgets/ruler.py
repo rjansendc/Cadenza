@@ -218,9 +218,19 @@ class Ruler(QWidget):
 
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.MouseButton.LeftButton:
+            # dragging: draft frames, so the picture keeps up
+            self.app_state.scrubbing = True
             self._set_playhead_from_mouse(
                 event.position().x()
             )
+
+    def mouseReleaseEvent(self, event):
+        if getattr(self.app_state, 'scrubbing', False):
+            self.app_state.scrubbing = False
+            # re-emit so the exact frame replaces the draft one
+            self.app_state.playhead_changed.emit(
+                self.app_state.playhead_frame)
+        super().mouseReleaseEvent(event)
 
     def _set_playhead_from_mouse(self, x: float):
         frame = self.app_state.pixel_to_frame(

@@ -144,3 +144,31 @@ def test_coverage_holds_at_preview_quality():
     c.set_preview_size(960, 540)
     assert c._covers_canvas(FakeRenderer(), 0)
     assert not c._covers_canvas(FakeRenderer(scale=80.0), 0)
+
+
+# ── skipping effects that are doing nothing ──────────────────────
+
+def test_fresh_effect_is_at_defaults():
+    import effects
+    from core.effects import EffectRegistry
+    for eff_cls in EffectRegistry.all():
+        eff = eff_cls()
+        assert eff.is_at_defaults(), f"{eff.id} not default on creation"
+
+
+def test_changed_effect_is_not_at_defaults():
+    from core.effects import EffectRegistry
+    lumetri = EffectRegistry.get('lumetri_color')()
+    assert lumetri.is_at_defaults()
+    lumetri.set('exposure', 0.5)
+    assert not lumetri.is_at_defaults()
+
+
+def test_setting_a_value_back_returns_to_default():
+    from core.effects import EffectRegistry
+    motion = EffectRegistry.get('motion')()
+    default = motion.get('scale')
+    motion.set('scale', 150.0)
+    assert not motion.is_at_defaults()
+    motion.set('scale', default)
+    assert motion.is_at_defaults()

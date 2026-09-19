@@ -589,12 +589,50 @@ class MainWindow(QMainWindow):
         )
 
     def _on_playhead_scrub(self, frame: int):
-        """When playhead moves manually, show that frame."""
-        if not self._playback or \
-                not self._playback.is_playing:
-            self._scrub_to_playhead()
-            if self._playback:
-                self._playback.seek(frame)
+        """
+        Playhead moved by hand: render that frame off the UI thread.
+
+        Dragging fires on every mouse move, so requests are coalesced
+        — only the newest position is rendered — and drawn draft (from
+        the nearest keyframe) while the mouse is down. The exact frame
+        follows on release.
+        """
+        if self._playback and self._playback.is_playing:
+            return
+
+        worker = self._ensure_scrub_worker()
+        if worker is None:
+            self._scrub_to_playhead()        # no worker: do it inline
+        else:
+            worker.set_context(
+                self._playback._compositor if self._playback else None,
+                list(self.project.clips.values()),
+                self.project.active_sequence)
+            # Draft (nearest-keyframe) scrubbing is off: on long-GOP
+            # footage it jumps backwards to the keyframe, which reads
+            # as wrong rather than fast. CADENZA_DRAFT_SCRUB=1 enables
+            # it for material with short GOPs.
+            import os
+            draft = (os.environ.get('CADENZA_DRAFT_SCRUB') == '1'
+                     and getattr(self.app_state, 'scrubbing', False))
+            worker.request(frame, draft=draft)
+
+        if self._playback:
+            self._playback.seek(frame)
+
+    def _ensure_scrub_worker(self):
+        """The thread that renders scrub frames, started on demand."""
+        worker = getattr(self, '_scrub_worker', None)
+        if worker is not None:
+            return worker
+        if not self._playback or not self._playback._compositor:
+            return None
+        from ui.scrub_worker import ScrubWorker
+        worker = ScrubWorker(self)
+        worker.frame_ready.connect(self.preview.display_frame)
+        worker.start()
+        self._scrub_worker = worker
+        return worker
 
     # =========================================================
     # Command Registration
@@ -1366,6 +1404,10 @@ class MainWindow(QMainWindow):
         if self.project.is_dirty:
             # TODO: ask to save
             pass
+        worker = getattr(self, '_scrub_worker', None)
+        if worker is not None:
+            worker.stop()
+            self._scrub_worker = None
         event.accept()
 
     # playback functions
@@ -1429,6 +1471,8 @@ class MainWindow(QMainWindow):
             self._preview_size_before_export = (comp.width, comp.height)
             comp.set_preview_size(
                 seq.settings.width, seq.settings.height)
+            # never export from proxy media
+            comp.set_use_proxies(False)
 
         self._export_thread = ExportThread(
             config      = config,
@@ -1464,6 +1508,7 @@ class MainWindow(QMainWindow):
         if size and getattr(self, '_playback', None) and \
                 self._playback._compositor:
             self._playback._compositor.set_preview_size(*size)
+            self._playback._compositor.set_use_proxies(True)
         self._preview_size_before_export = None
 
     def _on_export_finished(self, path: str):

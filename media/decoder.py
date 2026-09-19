@@ -14,15 +14,32 @@ class VideoDecoder:
     No decord — works on any file size instantly.
     Thread-safe with lock around container access.
     """
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, use_proxy: bool = True):
+        self.source_path = Path(filepath)
         self.path  = Path(filepath)
+        self.is_proxy = False
         self._lock = threading.Lock()
         if not self.path.exists():
             raise FileNotFoundError(
                 f"Video not found: {filepath}"
             )
+
+        # Preview reads the proxy when one exists: every frame is a
+        # keyframe there, so seeking costs one frame instead of a
+        # whole GOP. Export passes use_proxy=False.
+        if use_proxy:
+            try:
+                from core.proxy import proxy_path
+                candidate = proxy_path(filepath)
+                if candidate.exists() and candidate.stat().st_size > 0:
+                    self.path = candidate
+                    self.is_proxy = True
+            except Exception:
+                pass
         self._container     = None
         self._video_stream  = None
+        self._hw_ctx        = None   # NVDEC context, when available
+        self.hardware_decode = False
         self._decode_gen    = None  # sequential generator
         self._last_frame    = None  # last decoded frame
         self._last_frame_idx = -1   # its index
@@ -65,6 +82,45 @@ class VideoDecoder:
             self.duration    = 0.0
             self.frame_count = 0
 
+    # codecs NVDEC can take off the CPU
+    _CUVID = {
+        'h264': 'h264_cuvid',
+        'hevc': 'hevc_cuvid',
+        'mpeg2video': 'mpeg2_cuvid',
+        'vp9':  'vp9_cuvid',
+        'av1':  'av1_cuvid',
+    }
+
+    def _make_hw_context(self, stream):
+        """
+        Decode on the GPU's video engine instead of the CPU, when the
+        build has it. Set CADENZA_HWDECODE=0 to force software.
+
+        Returns None when unavailable, and the caller carries on with
+        the software path.
+        """
+        import os
+        # Off by default: measured on a 3090 Ti, NVDEC decoded 4K at
+        # 150 fps against 188 fps in software, because PyAV downloads
+        # every frame to system memory anyway. Set CADENZA_HWDECODE=1
+        # to try it on other hardware.
+        if os.environ.get('CADENZA_HWDECODE', '0') != '1':
+            return None
+        try:
+            if not torch.cuda.is_available():
+                return None
+            name = stream.codec_context.name
+            hw_name = self._CUVID.get(name)
+            if not hw_name or hw_name not in av.codecs_available:
+                return None
+            codec = av.codec.Codec(hw_name, 'r')
+            ctx = codec.create()
+            ctx.extradata = stream.codec_context.extradata
+            return ctx
+        except Exception as e:
+            print(f"NVDEC unavailable for {self.path.name}: {e}")
+            return None
+
     def _open_container(self):
         if self._container is None:
             self._container = av.open(str(self.path))
@@ -72,11 +128,36 @@ class VideoDecoder:
             if vs:
                 self._video_stream = vs[0]
                 self._video_stream.thread_type = "AUTO"
+                self._hw_ctx = self._make_hw_context(
+                    self._video_stream)
+                self.hardware_decode = self._hw_ctx is not None
             self._decode_gen   = None
             self._last_frame_idx = -1
         return self._container, self._video_stream
 
-    def get_frame(self, frame_index: int) -> torch.Tensor:
+    def _iter_frames(self):
+        """Frames in order, from the GPU decoder when there is one."""
+        container, stream = self._open_container()
+        if stream is None:
+            return
+        if self._hw_ctx is None:
+            for frame in container.decode(video=0):
+                yield frame
+            return
+        for packet in container.demux(stream):
+            try:
+                for frame in self._hw_ctx.decode(packet):
+                    yield frame
+            except Exception as e:
+                print(f"NVDEC decode error, falling back: {e}")
+                self._hw_ctx = None
+                self.hardware_decode = False
+                for frame in container.decode(video=0):
+                    yield frame
+                return
+
+    def get_frame(self, frame_index: int,
+                   draft: bool = False) -> torch.Tensor:
         frame_index = max(
             0, min(frame_index,
                    max(0, self.frame_count - 1))
@@ -99,9 +180,11 @@ class VideoDecoder:
                     )
                 else:
                     # random access — seek
-                    result = self._seek_frame(frame_index)
-                self._cached_frame_idx = frame_index
-                self._cached_frame_tensor = result
+                    result = self._seek_frame(
+                        frame_index, draft=draft)
+                if not draft:
+                    self._cached_frame_idx = frame_index
+                    self._cached_frame_tensor = result
                 return result
             except Exception as e:
                 print(f"Frame error {frame_index}: {e}")
@@ -126,9 +209,7 @@ class VideoDecoder:
 
         # start generator if needed
         if self._decode_gen is None:
-            self._decode_gen = container.decode(
-                video=0
-            )
+            self._decode_gen = self._iter_frames()
 
         best = None
         frames_needed = delta
@@ -147,9 +228,17 @@ class VideoDecoder:
         self._last_frame_idx = target_idx
         return self._frame_to_tensor(best)
 
-    def _seek_frame(self,
-                     frame_index: int) -> torch.Tensor:
-        """Seek to specific frame — for scrubbing."""
+    def _seek_frame(self, frame_index: int,
+                     draft: bool = False) -> torch.Tensor:
+        """
+        Seek to a specific frame.
+
+        draft=True returns the keyframe at or before the target instead
+        of decoding forward to it. Long-GOP 4K can be seconds of video
+        between keyframes, and walking that for every mouse move is
+        what makes dragging the playhead unusable. The exact frame is
+        fetched when the drag ends.
+        """
         container, stream = self._open_container()
         if stream is None:
             return self._blank_frame()
@@ -168,16 +257,31 @@ class VideoDecoder:
             any_frame=False
         )
 
+        if self._hw_ctx is not None:
+            try:
+                self._hw_ctx.flush_buffers()
+            except Exception:
+                pass
+
         best = None
         tolerance = 0.5 / self.fps
         for packet in container.demux(stream):
-            for frame in packet.decode():
+            try:
+                decoded = (self._hw_ctx.decode(packet)
+                           if self._hw_ctx is not None
+                           else packet.decode())
+            except Exception as e:
+                print(f"NVDEC seek error, using software: {e}")
+                self._hw_ctx = None
+                self.hardware_decode = False
+                decoded = packet.decode()
+            for frame in decoded:
                 if frame.pts is None:
                     continue
                 ft = float(frame.pts) * time_base
                 # keep advancing until we reach target
                 best = frame
-                if ft >= target_sec - tolerance:
+                if draft or ft >= target_sec - tolerance:
                     break
             else:
                 # inner loop did not break — keep demuxing
@@ -201,24 +305,25 @@ class VideoDecoder:
 
     def _frame_to_tensor(self,
                           frame) -> torch.Tensor:
-        img = frame.to_ndarray(format='rgb24')
-        # pre-scale on CPU if source is much larger
-        # than output — reduces GPU transfer size
-        out_w = getattr(self, '_out_w', 0)
-        out_h = getattr(self, '_out_h', 0)
-        if (out_w > 0 and out_h > 0 and
-                img.shape[1] > out_w * 1.5):
-            try:
-                import cv2
-                img = cv2.resize(
-                    img, (out_w, out_h),
-                    interpolation=cv2.INTER_LINEAR
-                )
-            except ImportError:
-                pass  # cv2 not available, skip
-        return torch.from_numpy(
-            np.ascontiguousarray(img)
-        ).to('cuda')
+        """
+        Upload the decoded frame as RGB on the GPU.
+
+        Converting YUV->RGB on the GPU instead of asking PyAV for
+        'rgb24' saves the CPU colour conversion and halves the bytes
+        transferred (1080p: 1.47ms/6.2MB -> 0.18ms/3.1MB; a 4K frame
+        is four times that). Any format the fast path does not handle
+        falls back to libswscale.
+        """
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        try:
+            from gpu.yuv import frame_to_rgb_tensor
+            return frame_to_rgb_tensor(frame, device=device)
+        except Exception as e:
+            print(f"YUV fast path unavailable ({e}), using rgb24")
+            img = frame.to_ndarray(format='rgb24')
+            return torch.from_numpy(
+                np.ascontiguousarray(img)
+            ).to(device)
 
     def _blank_frame(self) -> torch.Tensor:
         return torch.zeros(
@@ -232,6 +337,8 @@ class VideoDecoder:
                 self._container.close()
         except Exception:
             pass
+        self._hw_ctx              = None
+        self.hardware_decode      = False
         self._container           = None
         self._video_stream        = None
         self._decode_gen          = None
