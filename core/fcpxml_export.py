@@ -16,6 +16,19 @@ What does not:
   - anchor point, which Basic Motion has no equivalent for
   - cross dissolves, time remapping and Lumetri colour
 Anything dropped is listed in the report rather than lost silently.
+
+Known gap, not yet investigated: Premiere opens the sequence and the
+cut is right, but Motion values do not survive as expected. Scale is
+the prime suspect. Import reads FCP scale as a percentage of the clip
+FITTED to the frame — which is what Premiere's own export showed, a 4K
+angle filling a 1080p frame written as 100 — and export converts back
+the same way. If Premiere's importer instead reads scale as a
+percentage of native size, the two disagree and a 4K clip lands at
+double or half.
+
+The way to settle it: export a single 4K clip at a known Scale, open it
+in Premiere, and read the Scale that Motion shows. Then compare that
+against what Premiere writes for the same framing in its own export.
 """
 
 from __future__ import annotations
