@@ -41,6 +41,11 @@ class AudioMixer(threading.Thread):
 
         self._playing    = False
         self._mix_frame  = 0
+        # A 0.2s chunk is 5.994 frames at 29.97. Advancing the mix
+        # position by int() of that repeated ~1 frame of audio per
+        # chunk — five audible ticks a second. Keep the exact position
+        # here and let _mix_frame remain the integer video syncs to.
+        self._mix_frame_exact = 0.0
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
 
@@ -61,6 +66,7 @@ class AudioMixer(threading.Thread):
     def play(self, frame: int):
         self._playing   = False
         self._mix_frame = frame
+        self._mix_frame_exact = float(frame)
 
         start_time = frame / self.fps
         with self._clips_lock:
@@ -72,6 +78,7 @@ class AudioMixer(threading.Thread):
 
         self.ring.clear()
         self._mix_frame = self._do_prefill(frame)
+        self._mix_frame_exact = float(self._mix_frame)
         self._playing   = True
         self._wake_event.set()
 
@@ -82,6 +89,7 @@ class AudioMixer(threading.Thread):
         """Only call this during manual scrub, not during playback."""
         self._playing   = False
         self._mix_frame = frame
+        self._mix_frame_exact = float(frame)
         self.ring.clear()
         seek_time = frame / self.fps
         with self._clips_lock:
@@ -104,13 +112,14 @@ class AudioMixer(threading.Thread):
                 continue
 
             if self.ring.available < self._low_samples:
-                chunk  = self._mix_chunk(self._mix_frame,
+                chunk  = self._mix_chunk(self._mix_frame_exact,
                                           self._chunk_samples)
                 written = self.ring.write(chunk)
                 if written > 0:
-                    self._mix_frame += int(
+                    self._mix_frame_exact += (
                         written / self.sample_rate * self.fps
                     )
+                    self._mix_frame = int(self._mix_frame_exact)
             else:
                 sleep_time = (
                     (self.ring.available - self._low_samples)
@@ -120,16 +129,21 @@ class AudioMixer(threading.Thread):
 
     def _do_prefill(self, start_frame: int) -> int:
         target = int(PREFILL_SECONDS * self.sample_rate)
-        frame  = start_frame
+        frame  = float(start_frame)
         while self.ring.available < target:
             chunk   = self._mix_chunk(frame, self._chunk_samples)
             written = self.ring.write(chunk)
             if written <= 0:
                 break
-            frame += int(written / self.sample_rate * self.fps)
-        return frame
+            frame += written / self.sample_rate * self.fps
+        return int(frame)
 
-    def _mix_chunk(self, start_frame, num_samples):
+    def _mix_chunk(self, start_frame: float, num_samples: int):
+        """
+        Mix one chunk starting at an exact (possibly fractional)
+        timeline frame — timeline_to_source_time works in seconds, so
+        sub-frame positions map cleanly into the source.
+        """
         output = np.zeros((self.channels, num_samples),
                           dtype=np.float32)
 
@@ -137,7 +151,8 @@ class AudioMixer(threading.Thread):
             renderers = list(self._renderers)
             sequence  = self._sequence
 
-        active = self._get_active(renderers, start_frame, sequence)
+        active = self._get_active(
+            renderers, int(start_frame), sequence)
 
         for renderer in active:
             decoder = self._ensure_decoder(renderer.clip.filepath)
@@ -151,8 +166,8 @@ class AudioMixer(threading.Thread):
                 continue
 
             samples = self._match_channels(samples)
-            volume  = renderer.get_volume_at(start_frame)
-            pan     = renderer.get_pan_at(start_frame)
+            volume  = renderer.get_volume_at(int(start_frame))
+            pan     = renderer.get_pan_at(int(start_frame))
 
             if self.channels >= 2:
                 l_gain = min(1.0, 1.0 - pan)

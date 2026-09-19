@@ -218,12 +218,20 @@ class FCPXMLImporter:
         motion = clip.get_effect('motion')
         if motion is None:
             return
+
+        # In FCP XML, scale is a percentage of the clip FITTED to the
+        # frame, not of its native pixels. A 4K angle in a 1080p
+        # sequence sits at 100 when it fills the frame, and Premiere's
+        # 120% punch-ins are on top of that. Reading 120 as 120% of
+        # 3840px would zoom in 2.4x instead.
+        fit = self._fit_percent(clip, canvas_w, canvas_h) / 100.0
         for p in eff.findall('parameter'):
             pid = (p.findtext('parameterid') or '').strip()
             kfs = p.findall('keyframe')
 
             if pid == 'scale':
-                self._set_param(clip, motion, 'scale', p, kfs, lambda v: v)
+                self._set_param(clip, motion, 'scale', p, kfs,
+                                lambda v, f=fit: v * f)
             elif pid == 'rotation':
                 self._set_param(clip, motion, 'rotation', p, kfs, lambda v: v)
             elif pid in ('leftcrop', 'topcrop', 'rightcrop', 'bottomcrop'):
@@ -243,6 +251,15 @@ class FCPXMLImporter:
                     vt = _float(v.findtext('vert'), 0.0)
                     motion.set('position_x', canvas_w / 2.0 + h * canvas_w)
                     motion.set('position_y', canvas_h / 2.0 + vt * canvas_h)
+
+    @staticmethod
+    def _fit_percent(clip, canvas_w, canvas_h) -> float:
+        """Scale percentage that fits the source inside the frame."""
+        src_w = clip.source_width  or canvas_w
+        src_h = clip.source_height or canvas_h
+        if not src_w or not src_h:
+            return 100.0
+        return min(canvas_w / src_w, canvas_h / src_h) * 100.0
 
     def _set_param(self, clip, effect, param, p_el, kfs, convert):
         """Static value, or keyframes when the parameter is animated."""
@@ -411,6 +428,13 @@ class FCPXMLImporter:
         label = ci.findtext('labels/label2')
         if label in LABEL_COLORS:
             clip.label_color = LABEL_COLORS[label]
+
+        # baseline: fit to the frame, as Premiere shows a mismatched
+        # source. Basic Motion below multiplies its percentage by this.
+        motion = clip.get_effect('motion')
+        if motion is not None and is_video:
+            motion.set('scale',
+                       self._fit_percent(clip, canvas_w, canvas_h))
 
         self._apply_filters(clip, ci, canvas_w, canvas_h, clip.name)
 
