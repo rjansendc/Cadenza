@@ -618,7 +618,11 @@ class MainWindow(QMainWindow):
             worker.request(self._scrub_target(frame), draft=draft)
 
         if self._playback:
-            self._playback.seek(frame)
+            # mid-drag the audio position only needs recording; priming
+            # every source is what made a busy project crawl
+            self._playback.seek(
+                frame,
+                prime=not getattr(self.app_state, 'scrubbing', False))
 
     def _scrub_target(self, frame: int) -> int:
         """

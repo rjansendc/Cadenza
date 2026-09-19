@@ -122,8 +122,8 @@ class PlaybackEngine(QObject):
         else:
             self.play()
 
-    def seek(self, frame: int):
-        self._mixer.seek(frame)
+    def seek(self, frame: int, prime: bool = True):
+        self._mixer.seek(frame, prime=prime)
 
     @property
     def is_playing(self) -> bool:

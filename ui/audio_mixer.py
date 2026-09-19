@@ -85,15 +85,35 @@ class AudioMixer(threading.Thread):
     def pause(self):
         self._playing = False
 
-    def seek(self, frame: int):
-        """Only call this during manual scrub, not during playback."""
+    def seek(self, frame: int, prime: bool = True):
+        """
+        Move the audio position. Only call during manual scrub, not
+        during playback.
+
+        prime=False just records the position. Priming seeks and fills
+        a decode window for every source, which on a concert project
+        means around 25 file seeks — far too much to do on every mouse
+        move while dragging the playhead. Nothing is being heard mid
+        drag anyway, and play() primes before it starts.
+        """
         self._playing   = False
         self._mix_frame = frame
         self._mix_frame_exact = float(frame)
         self.ring.clear()
+        if not prime:
+            return
+
         seek_time = frame / self.fps
         with self._clips_lock:
-            for dec in self._decoders.values():
+            renderers = list(self._renderers)
+
+        # only the sources actually audible at this frame
+        wanted = {r.clip.filepath for r in renderers
+                  if r.is_active_at(frame)}
+        with self._clips_lock:
+            for path, dec in self._decoders.items():
+                if wanted and path not in wanted:
+                    continue
                 try:
                     dec.prime(seek_time)
                 except Exception as e:
