@@ -784,23 +784,22 @@ class TrackCanvas(QGraphicsView):
                 )
                 return
         from pathlib import Path
+        from media.waveform_worker import waveform_queue
         name = Path(fp).name
-        worker = WaveformWorker(fp)
-        worker.completed.connect(
-            lambda f, p, c=clip:
-            self._on_waveform_ready(f, p, c.id)
-        )
-        # show progress in mainwindow status bar
-        worker.progress.connect(
-            lambda f, pct, n=name:
-            self._on_waveform_progress(n, pct)
-        )
-        worker.completed.connect(
-            lambda f, p, n=name:
+
+        def _ready(f, peaks, c=clip, n=name):
+            self._on_waveform_ready(f, peaks, c.id)
             self._on_waveform_done(n)
+
+        # the queue decodes a couple of files at a time and joins
+        # duplicate requests, so the same file on several tracks is
+        # only ever read once
+        waveform_queue.submit(
+            fp,
+            completed=_ready,
+            progress=lambda f, pct, n=name:
+                self._on_waveform_progress(n, pct),
         )
-        self._waveform_workers[fp] = worker
-        worker.start()
 
     def _on_waveform_progress(self,
                                name: str,

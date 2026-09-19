@@ -138,6 +138,16 @@ def _serialize_clip(clip) -> dict:
         'muted':        clip.muted,
         'volume':       clip.volume,
         'label_color':  clip.label_color,
+        # static effect values: motion, lumetri, time remap. Keyframed
+        # parameters live in 'envelopes' instead.
+        'effects':      [
+            {
+                'id':      eff.id,
+                'enabled': eff.enabled,
+                'params':  eff.get_all(),
+            }
+            for eff in clip.effect_stack
+        ],
         'envelopes':    {
             k: _serialize_envelope(v)
             for k, v in clip.envelopes.items()
@@ -293,6 +303,15 @@ def _deserialize_clip(data: dict) -> 'Clip':
             'label_color', '#4a9de0'
         ),
     )
+
+    # restore effect parameters onto the stack the clip built itself
+    for eff_data in data.get('effects', []):
+        eff = clip.get_effect(eff_data.get('id'))
+        if eff is None:
+            continue
+        eff.enabled = eff_data.get('enabled', True)
+        for name, value in (eff_data.get('params') or {}).items():
+            eff.set(name, value)
 
     # restore envelopes
     for key, env_data in data.get(

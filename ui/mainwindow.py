@@ -287,6 +287,8 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, 'Save As...',
                          self._on_save_as, 'Ctrl+Shift+S')
         file_menu.addSeparator()
+        self._add_action(file_menu, 'Import Premiere/FCP XML...',
+                         self._on_import_fcpxml)
         self._add_action(file_menu, 'Import Media...',
                          self._on_import_media,  'Ctrl+I')
         file_menu.addSeparator()
@@ -748,6 +750,63 @@ class MainWindow(QMainWindow):
                 self, 'Open Failed', str(e)
             )
 
+    def _on_import_fcpxml(self):
+        """
+        Import a sequence exported from Premiere as Final Cut Pro XML.
+        Replaces the current project, so it warns first.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Import Premiere/FCP XML', '',
+            'FCP XML (*.xml)'
+        )
+        if not path:
+            return
+
+        try:
+            from core.fcpxml_import import import_fcpxml
+            project, report = import_fcpxml(path)
+        except Exception as e:
+            QMessageBox.critical(self, 'Import Failed', str(e))
+            return
+
+        # tell the user what did and did not come across before
+        # throwing away whatever is open
+        text = report.summary()
+        if report.missing_files:
+            text += ("\n\nMedia that is missing will still import — "
+                     "the clips point at paths that are not on this "
+                     "machine.")
+        box = QMessageBox(self)
+        box.setWindowTitle('Import Premiere/FCP XML')
+        box.setText(f"Import '{report.sequence_name}'?")
+        box.setInformativeText("This replaces the current project.")
+        box.setDetailedText(text)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Ok |
+            QMessageBox.StandardButton.Cancel)
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return
+
+        self.project = project
+        self.app_state.deselect_all()
+        self.app_state.total_frames = getattr(project, 'total_frames', 0)
+        self.app_state.set_view(0.0, 1.0)
+        self.timeline.project = project
+        self.timeline.refresh()
+        self.media_bin.project = project
+        self.media_bin.list_widget.clear()
+        for item in project.media_pool.values():
+            self.media_bin.add_item(item)
+        self._update_title()
+        self._on_zoom_fit()
+        self._update_playback_clips()
+        self.status_label.setText(
+            f"Imported {report.sequence_name}: "
+            f"{report.video_clips + report.audio_clips} clips"
+        )
+
     def _on_save(self):
         fp = getattr(self.project, 'project_path', None)
         if fp:
@@ -1158,14 +1217,15 @@ class MainWindow(QMainWindow):
 
     def _on_preview_resolution_changed(
             self, w: int, h: int):
-        """Update decoder output size for all decoders."""
+        """Composite at the chosen preview size."""
         if (getattr(self, '_playback', None) and
                 self._playback._compositor):
             comp = self._playback._compositor
+            comp.set_preview_size(w, h)
+            # decoders still hand back full-size frames; the pre-scale
+            # hook stays for a decoder that can decode smaller
             for dec in comp._decoders.values():
-                if dec and hasattr(
-                    dec, 'set_output_size'
-                ):
+                if dec and hasattr(dec, 'set_output_size'):
                     dec.set_output_size(w, h)
             comp.invalidate_cache()
         self.status_label.setText(
@@ -1251,6 +1311,10 @@ class MainWindow(QMainWindow):
         if self._playback:
             self._playback.toggle()
             playing = self._playback.is_playing
+            # waveform decoding is disk-bound; leave the drives to
+            # video decode while playing
+            from media.waveform_worker import waveform_queue
+            waveform_queue.pause() if playing else waveform_queue.resume()
             if hasattr(self, '_play_btn'):
                 self._play_btn.setIcon(
                     _icon('pause.ico') if playing
@@ -1358,6 +1422,14 @@ class MainWindow(QMainWindow):
 
         clips = list(self.project.clips.values())
 
+        # the export shares the playback compositor, which may be set
+        # to preview quality — render full size and restore afterwards
+        comp = self._playback._compositor
+        if comp is not None:
+            self._preview_size_before_export = (comp.width, comp.height)
+            comp.set_preview_size(
+                seq.settings.width, seq.settings.height)
+
         self._export_thread = ExportThread(
             config      = config,
             clips       = clips,
@@ -1384,8 +1456,18 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_export_thread'):
             self._export_thread.cancel()
             self._export_thread.wait(3000)
+        self._restore_preview_size()
+
+    def _restore_preview_size(self):
+        """Undo the full-size switch made for an export."""
+        size = getattr(self, '_preview_size_before_export', None)
+        if size and getattr(self, '_playback', None) and \
+                self._playback._compositor:
+            self._playback._compositor.set_preview_size(*size)
+        self._preview_size_before_export = None
 
     def _on_export_finished(self, path: str):
+        self._restore_preview_size()
         self.status_label.setText(
             f'Export complete: {path}'
         )
@@ -1393,6 +1475,7 @@ class MainWindow(QMainWindow):
             self._export_dialog.set_finished(path)
 
     def _on_export_error(self, msg: str):
+        self._restore_preview_size()
         self.status_label.setText(f'Export error: {msg}')
         if hasattr(self, '_export_dialog'):
             self._export_dialog.set_error(msg)
@@ -1409,6 +1492,12 @@ class MainWindow(QMainWindow):
                 self.preview.display_frame
             )
             self._update_playback_clips()
+            # honour whatever quality the preview panel is set to
+            # (it defaults to 1/2) now that a compositor exists
+            if self._playback._compositor and hasattr(
+                    self.preview, 'preview_size'):
+                w, h = self.preview.preview_size()
+                self._playback._compositor.set_preview_size(w, h)
             # Warm up CUDA kernels in background so first real
             # composite is instant. PyTorch JIT-compiles kernels
             # on first use — this fires that compilation now.
