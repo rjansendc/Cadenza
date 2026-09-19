@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -289,6 +290,8 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         self._add_action(file_menu, 'Import Premiere/FCP XML...',
                          self._on_import_fcpxml)
+        self._add_action(file_menu, 'Export Premiere/FCP XML...',
+                         self._on_export_fcpxml)
         self._add_action(file_menu, 'Import Media...',
                          self._on_import_media,  'Ctrl+I')
         file_menu.addSeparator()
@@ -656,6 +659,40 @@ class MainWindow(QMainWindow):
             return frame
         step = int(min(48, max(2, frames_per_second / 60)))
         return (frame // step) * step
+
+    def _on_export_fcpxml(self):
+        """Write the sequence as FCP XML, which Premiere and Resolve read."""
+        from PySide6.QtWidgets import QMessageBox
+
+        seq = self.project.active_sequence
+        if not seq or not self.project.clips:
+            QMessageBox.information(self, 'Export XML',
+                                    'Nothing to export.')
+            return
+
+        suggested = (seq.name or 'sequence') + '.xml'
+        path, _ = QFileDialog.getSaveFileName(
+            self, 'Export Premiere/FCP XML', suggested,
+            'FCP XML (*.xml)')
+        if not path:
+            return
+
+        try:
+            from core.fcpxml_export import export_fcpxml
+            report = export_fcpxml(self.project, path, seq)
+        except Exception as e:
+            QMessageBox.critical(self, 'Export Failed', str(e))
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle('Export Premiere/FCP XML')
+        box.setText(f"Wrote {os.path.basename(path)}")
+        box.setInformativeText(
+            f"{report.video_clips} video and {report.audio_clips} "
+            f"audio clips.")
+        box.setDetailedText(report.summary())
+        box.exec()
+        self.status_label.setText(f'Exported: {path}')
 
     def _ensure_scrub_worker(self):
         """The thread that renders scrub frames, started on demand."""
