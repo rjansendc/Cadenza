@@ -22,9 +22,15 @@ class Compositor:
 
     def __init__(self, sequence: Sequence):
         self.sequence = sequence
+        self.seq_width  = sequence.settings.width
+        self.seq_height = sequence.settings.height
         self.width    = sequence.settings.width
         self.height   = sequence.settings.height
         self.fps      = sequence.settings.fps
+        # 1.0 = full size. Preview quality composites smaller, which
+        # cuts every per-pixel cost: interpolate, paste, blend, and
+        # the frame that comes back to the UI.
+        self.geom_scale = 1.0
 
         self._decoders:    Dict[str, object] = {}
         self._frame_cache: Dict[int, object] = {}
@@ -34,11 +40,36 @@ class Compositor:
         self._clips_hash:  int  = 0
         import threading
         self._decoder_lock = threading.Lock()
+        # decoding is the floor on playback: one 4K frame costs ~9ms,
+        # and stacked angles pay that per clip. PyAV releases the GIL
+        # while decoding, so fetching them at once overlaps the work.
+        self._decode_pool = None
 
         self._blank = torch.zeros(
             self.height, self.width, 3,
             dtype=torch.uint8
         )
+
+    def set_preview_size(self, width: int, height: int):
+        """
+        Composite at this size instead of the full sequence size.
+
+        Motion values are expressed in sequence pixels, so everything
+        geometric is scaled by the same factor — otherwise a clip keeps
+        its full-size position on a smaller canvas and lands in the
+        corner.
+        """
+        width  = max(16, int(width))
+        height = max(16, int(height))
+        if (width, height) == (self.width, self.height):
+            return
+        self.width  = width
+        self.height = height
+        self.geom_scale = (width / self.seq_width) if self.seq_width else 1.0
+        self._blank = torch.zeros(
+            self.height, self.width, 3, dtype=torch.uint8
+        )
+        self.invalidate_cache()
 
     def get_decoder(self, filepath: str):
         # fast path — already exists, no lock needed
@@ -157,11 +188,20 @@ class Compositor:
             key=lambda r: r.clip.track
         )
 
+        # Cutting between camera angles stacks full-frame clips, and
+        # decoding one 4K frame costs ~9ms. Anything completely hidden
+        # behind an opaque full-frame clip above it is never seen, so
+        # start from the topmost clip that covers the canvas.
+        for i in range(len(active_sorted) - 1, 0, -1):
+            if self._covers_canvas(active_sorted[i], playhead_frame):
+                active_sorted = active_sorted[i:]
+                break
+
+        frames = self._get_frames(active_sorted, playhead_frame)
+
         for renderer in active_sorted:
             try:
-                frame_tensor = self._get_frame(
-                    renderer, playhead_frame
-                )
+                frame_tensor = frames.get(id(renderer))
                 if frame_tensor is None:
                     continue
 
@@ -230,6 +270,78 @@ class Compositor:
             print(f"Frame decode error: {e}")
             return None
 
+    def _get_frames(self, renderers, playhead_frame: int) -> dict:
+        """
+        Decode every clip needed for this frame, in parallel when
+        there is more than one. Falls back to sequential decoding if
+        the pool cannot be used.
+        """
+        if len(renderers) <= 1:
+            return {
+                id(r): self._get_frame(r, playhead_frame)
+                for r in renderers
+            }
+
+        try:
+            if self._decode_pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._decode_pool = ThreadPoolExecutor(
+                    max_workers=4,
+                    thread_name_prefix='decode')
+            futures = {
+                id(r): self._decode_pool.submit(
+                    self._get_frame, r, playhead_frame)
+                for r in renderers
+            }
+            return {key: f.result() for key, f in futures.items()}
+        except Exception as e:
+            print(f"Parallel decode unavailable ({e}), falling back")
+            return {
+                id(r): self._get_frame(r, playhead_frame)
+                for r in renderers
+            }
+
+    def _covers_canvas(self, renderer, playhead_frame: int) -> bool:
+        """
+        Does this clip fill the whole frame, opaque, with nothing
+        underneath showing? Deliberately conservative: any rotation,
+        crop or transparency and the answer is no.
+        """
+        try:
+            if renderer.get_opacity_at(playhead_frame) < 0.999:
+                return False
+
+            m = renderer.get_motion_at(playhead_frame)
+            if abs(m.get('rotation') or 0.0) > 0.01:
+                return False
+            for k in ('crop_left', 'crop_right',
+                      'crop_top', 'crop_bottom'):
+                if (m.get(k) or 0.0) > 0.0:
+                    return False
+
+            gs = self.geom_scale
+            scale_h = (m.get('scale') or 100.0) / 100.0 * gs
+            uniform = m.get('uniform_scale')
+            if uniform is None:
+                uniform = True
+            scale_w = (scale_h if uniform
+                       else (m.get('scale_x') or 100.0) / 100.0 * gs)
+
+            clip = renderer.clip
+            src_w = clip.source_width  or self.seq_width
+            src_h = clip.source_height or self.seq_height
+            w = src_w * scale_w
+            h = src_h * scale_h
+
+            cx = (m.get('position_x') or self.seq_width / 2.0) * gs
+            cy = (m.get('position_y') or self.seq_height / 2.0) * gs
+
+            return (cx - w / 2.0 <= 0.5 and cy - h / 2.0 <= 0.5 and
+                    cx + w / 2.0 >= self.width - 0.5 and
+                    cy + h / 2.0 >= self.height - 0.5)
+        except Exception:
+            return False      # never let an optimisation break a frame
+
     def _apply_motion(self,
                        frame: torch.Tensor,
                        motion: dict
@@ -254,6 +366,14 @@ class Compositor:
             scale_h if uniform
             else (motion.get('scale_x') or 100.0) / 100.0
         )
+
+        # preview quality: shrink the picture and its placement together
+        gs = self.geom_scale
+        if gs != 1.0:
+            scale_h *= gs
+            scale_w *= gs
+            pos_x   *= gs
+            pos_y   *= gs
 
         if scale_h <= 0:
             scale_h = 0.01
@@ -435,5 +555,8 @@ class Compositor:
         return frame
 
     def close(self):
+        if self._decode_pool is not None:
+            self._decode_pool.shutdown(wait=False)
+            self._decode_pool = None
         self._decoders.clear()
         self._frame_cache.clear()
