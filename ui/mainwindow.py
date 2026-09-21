@@ -342,6 +342,9 @@ class MainWindow(QMainWindow):
 
         # Help
         help_menu = mb.addMenu('Help')
+        self._add_action(help_menu, 'Open Cache Folder',
+                         self._on_open_cache_folder)
+        help_menu.addSeparator()
         self._add_action(help_menu, 'About',
                          self._on_about)
 
@@ -1469,9 +1472,28 @@ class MainWindow(QMainWindow):
             f'Cadenza — {self.project.name}{dirty}'
         )
 
+    def _on_open_cache_folder(self):
+        """
+        Show where waveforms and proxies are kept.
+
+        A packaged build keeps them beside Cadenza.exe, but falls back
+        to the user's data directory when that folder is read-only —
+        unzipped as administrator, for instance — so the only reliable
+        answer is the one the app works out at runtime.
+        """
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        from core.paths import cache_root
+
+        root = cache_root()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
+        self.status_label.setText(f'Cache: {root}')
+
     def _on_about(self):
+        from core.paths import cache_root
         self.status_label.setText(
-            'Cadenza v1.0 — built with PySide6 + PyTorch'
+            f'Cadenza v1.0 — built with PySide6 + PyTorch  ·  '
+            f'cache: {cache_root()}'
         )
 
     def closeEvent(self, event):

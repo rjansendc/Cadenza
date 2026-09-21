@@ -5,11 +5,15 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
 def main():
-    # ensure cache dir exists
-    from pathlib import Path
-    Path('cache/waveforms').mkdir(
-        parents=True, exist_ok=True
-    )
+    # Prepare the caches and say where they are. This used to be
+    # Path('cache/waveforms'), which is relative to whatever directory
+    # the app happened to be launched from — so it scattered empty
+    # folders around and never matched where the caches really went.
+    from core.paths import cache_root, cache_dir, is_frozen
+    cache_dir('waveforms')
+    cache_dir('proxies')
+    print(f"Cache: {cache_root()}"
+          f"{'' if is_frozen() else '  (running from source)'}")
 
     app = QApplication(sys.argv)
     app.setApplicationName('Cadenza')
