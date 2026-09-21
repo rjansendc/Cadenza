@@ -49,3 +49,7 @@ screenshots/
 ffmpeg.exe
 ffprobe.exe
 *.exe
+
+# Website: contains the 2.4GB build, Stripe delivery code and
+# customer session records — none of it belongs in the repo
+web/
