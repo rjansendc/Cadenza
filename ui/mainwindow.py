@@ -605,6 +605,8 @@ class MainWindow(QMainWindow):
         """
         if self._playback and self._playback.is_playing:
             return
+        if getattr(self, '_exporting', False):
+            return              # a render is using the compositor
 
         worker = self._ensure_scrub_worker()
         if worker is None:
@@ -1586,6 +1588,7 @@ class MainWindow(QMainWindow):
         self._export_thread.finished.connect(
             self._on_export_finished
         )
+        self._set_export_lock(True)
         self._export_thread.error.connect(
             self._on_export_error
         )
@@ -1596,7 +1599,36 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_export_thread'):
             self._export_thread.cancel()
             self._export_thread.wait(3000)
+        self._set_export_lock(False)
         self._restore_preview_size()
+
+    def _set_export_lock(self, locked: bool):
+        """
+        Freeze everything that touches the compositor while exporting.
+
+        The export shares the compositor, decoders and clip list with
+        the preview. Scrubbing or playing during a render has two
+        threads mutating the same renderer list and frame cache, which
+        can put a wrong frame in the finished file — not merely slow it
+        down. Editing clips mid-render is worse still.
+        """
+        self._exporting = locked
+
+        if locked and self._playback and self._playback.is_playing:
+            self._playback.pause()
+
+        for name in ('timeline', 'effects_panel', 'media_bin', 'preview'):
+            panel = getattr(self, name, None)
+            if panel is not None:
+                panel.setEnabled(not locked)
+
+        menubar = self.menuBar()
+        if menubar is not None:
+            menubar.setEnabled(not locked)
+
+        if locked:
+            self.status_label.setText(
+                'Exporting — editing is locked until it finishes')
 
     def _restore_preview_size(self):
         """Undo the full-size switch made for an export."""
@@ -1608,6 +1640,7 @@ class MainWindow(QMainWindow):
         self._preview_size_before_export = None
 
     def _on_export_finished(self, path: str):
+        self._set_export_lock(False)
         self._restore_preview_size()
         self.status_label.setText(
             f'Export complete: {path}'
@@ -1616,6 +1649,7 @@ class MainWindow(QMainWindow):
             self._export_dialog.set_finished(path)
 
     def _on_export_error(self, msg: str):
+        self._set_export_lock(False)
         self._restore_preview_size()
         self.status_label.setText(f'Export error: {msg}')
         if hasattr(self, '_export_dialog'):
