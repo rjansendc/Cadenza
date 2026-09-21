@@ -21,7 +21,10 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-CACHE_DIR = Path(__file__).parent.parent / 'cache' / 'proxies'
+from core.paths import cache_dir
+
+# see core/paths.py: a frozen build must not cache inside _internal/
+CACHE_DIR = cache_dir('proxies')
 
 # Running ffmpeg processes, so Ctrl+C can actually stop them. Without
 # this the transcodes carry on and the thread pool waits for them.

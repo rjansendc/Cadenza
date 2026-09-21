@@ -8,7 +8,11 @@ import hashlib
 # Always relative to this file's location
 # so cache is always found regardless of
 # which directory Python is launched from
-CACHE_DIR = Path(__file__).parent.parent / 'cache' / 'waveforms'
+from core.paths import cache_dir
+
+# Resolved through core.paths: Path(__file__) points inside _internal/
+# in a frozen build, which put the cache inside the application folder
+CACHE_DIR = cache_dir('waveforms')
 
 
 def get_cache_path(filepath: str) -> Path:

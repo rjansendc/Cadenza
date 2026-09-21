@@ -271,3 +271,42 @@ def test_changing_one_axis_does_not_move_the_other():
     assert motion.get('anchor_y') == before_y == 1080.0
     # and the vertical offset stays zero
     assert anchor_offset(2160, motion.get('anchor_y'), 0.5) == 0.0
+
+
+# ── where caches live ─────────────────────────────────────────────
+
+def test_cache_is_beside_the_code_when_running_from_source():
+    from core.paths import cache_root, is_frozen
+    import pathlib
+    assert not is_frozen()
+    expected = pathlib.Path(__file__).resolve().parent.parent / 'cache'
+    assert cache_root() == expected
+
+
+def test_named_cache_dirs_are_under_one_root():
+    from core.paths import cache_root, cache_dir
+    assert cache_dir('waveforms').parent == cache_root()
+    assert cache_dir('proxies').parent == cache_root()
+
+
+def test_cache_modules_use_the_shared_root():
+    """Both caches used to resolve inside _internal in a frozen build."""
+    from core.paths import cache_root
+    import media.waveform as waveform
+    import core.proxy as proxy
+    assert waveform.CACHE_DIR.parent == cache_root()
+    assert proxy.CACHE_DIR.parent == cache_root()
+
+
+def test_frozen_build_caches_outside_the_app(monkeypatch, tmp_path):
+    import importlib
+    import core.paths as paths
+
+    monkeypatch.setattr(paths.sys, 'frozen', True, raising=False)
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    root = paths.cache_root()
+
+    assert root == tmp_path / 'Cadenza' / 'cache'
+    assert root.exists()
+    # and never inside the bundle
+    assert '_internal' not in str(root)

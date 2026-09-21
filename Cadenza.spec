@@ -6,12 +6,18 @@ a = Analysis(
     binaries=[],
     datas=[
         ('icons', 'icons'),
-        ('effects', 'effects'),
+        # 'effects' is NOT shipped as data: nothing reads those files
+        # at runtime (the packages import each other, they are not
+        # scanned), so the copy in _internal was dead weight — and it
+        # handed the source of every effect to anyone with the build.
     ],
     hiddenimports=[
+        # Belt and braces: effects/__init__.py imports effects.video,
+        # whose __init__ imports the rest, so PyInstaller finds them
+        # anyway. Listed explicitly in case that chain is ever changed.
         'effects.video.motion',
         'effects.video.opacity',
-        'effects.video.lumetri',
+        'effects.video.lumetri_color',   # was 'lumetri' — no such module
         'effects.video.time_remap',
         'effects.audio.volume',
         'effects.audio.pan',
