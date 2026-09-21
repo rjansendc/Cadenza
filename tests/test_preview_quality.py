@@ -298,15 +298,37 @@ def test_cache_modules_use_the_shared_root():
     assert proxy.CACHE_DIR.parent == cache_root()
 
 
-def test_frozen_build_caches_outside_the_app(monkeypatch, tmp_path):
-    import importlib
+def test_frozen_build_caches_beside_the_exe(monkeypatch, tmp_path):
     import core.paths as paths
 
+    exe = tmp_path / 'app' / 'Cadenza.exe'
+    exe.parent.mkdir(parents=True)
     monkeypatch.setattr(paths.sys, 'frozen', True, raising=False)
-    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(paths.sys, 'executable', str(exe))
     root = paths.cache_root()
 
-    assert root == tmp_path / 'Cadenza' / 'cache'
+    assert root == exe.parent / 'cache'
     assert root.exists()
-    # and never inside the bundle
+    # never inside the bundle, which is what the bug was
     assert '_internal' not in str(root)
+
+
+def test_unwritable_install_falls_back_to_user_data(monkeypatch, tmp_path):
+    """An app unpacked somewhere read-only must still run."""
+    import core.paths as paths
+
+    exe = tmp_path / 'program files' / 'Cadenza.exe'
+    exe.parent.mkdir(parents=True)
+    monkeypatch.setattr(paths.sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(paths.sys, 'executable', str(exe))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'appdata'))
+
+    real_writable = paths._writable
+
+    def refuse_exe_dir(path):
+        if path == exe.parent / 'cache':
+            return False
+        return real_writable(path)
+
+    monkeypatch.setattr(paths, '_writable', refuse_exe_dir)
+    assert paths.cache_root() == tmp_path / 'appdata' / 'Cadenza' / 'cache'

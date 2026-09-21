@@ -28,32 +28,47 @@ def app_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _writable(path: Path) -> bool:
+    """Can we actually create and write here?"""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / '.write-test'
+        probe.write_bytes(b'')
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def cache_root() -> Path:
     """
     The cache directory, made if missing.
 
-    Source runs keep it beside the code, as before. A frozen build puts
-    it under the user's own data directory, so it survives reinstalls
-    and never needs write access to the install location.
+    A frozen build keeps it beside Cadenza.exe, so it travels with the
+    application folder and is easy to find or clear. If that folder is
+    read-only — the app unpacked into Program Files, say — it falls
+    back to the user's own data directory, and to temp after that, so a
+    cache location never stops the app from opening.
+
+    Source runs keep it beside the code, as before.
     """
     if is_frozen():
+        candidates = [Path(sys.executable).parent / 'cache']
         base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA')
         if base:
-            root = Path(base) / 'Cadenza' / 'cache'
-        else:                              # macOS / Linux builds
-            root = Path.home() / '.cache' / 'cadenza'
+            candidates.append(Path(base) / 'Cadenza' / 'cache')
+        else:
+            candidates.append(Path.home() / '.cache' / 'cadenza')
     else:
-        root = Path(__file__).resolve().parent.parent / 'cache'
+        candidates = [Path(__file__).resolve().parent.parent / 'cache']
 
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        # last resort: the system temp directory, so a cache failure
-        # never stops the app from opening
-        import tempfile
-        root = Path(tempfile.gettempdir()) / 'cadenza-cache'
-        root.mkdir(parents=True, exist_ok=True)
-    return root
+    import tempfile
+    candidates.append(Path(tempfile.gettempdir()) / 'cadenza-cache')
+
+    for candidate in candidates:
+        if _writable(candidate):
+            return candidate
+    return candidates[-1]
 
 
 def cache_dir(name: str) -> Path:
