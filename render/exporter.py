@@ -206,10 +206,21 @@ class ExportThread(QThread):
                 pct = int((i + 1) / total_frames * 100)
                 self.progress.emit(pct)
                 if i % 30 == 0 and i > 0 and len(_recent) > 1:
+                    # Rate over the last couple of seconds, for display:
+                    # it moves as the timeline gets heavier or lighter.
                     _elapsed = _recent[-1] - _recent[0]
                     _fps_est = (len(_recent) - 1) / _elapsed if _elapsed > 0 else 0
-                    _remain  = ((total_frames - i) / _fps_est / 60
-                                if _fps_est > 0 else 0)
+
+                    # Time remaining comes from the average since the
+                    # start instead. Per-frame cost swings by a factor
+                    # of two or more between a lone 1080p title and
+                    # three stacked 4K angles, so an estimate built on
+                    # the recent rate alone swung between 37 and 77
+                    # minutes on the same render.
+                    _since_start = _time.perf_counter() - _t_start
+                    _avg_fps = (i + 1) / _since_start if _since_start > 0 else 0
+                    _remain  = ((total_frames - i) / _avg_fps / 60
+                                if _avg_fps > 0 else 0)
                     print(f"[Export timing] i={i} "
                           f"decode={_t_decode/i*1000:.1f}ms "
                           f"yuv={_t_yuv/i*1000:.1f}ms "
@@ -219,8 +230,8 @@ class ExportThread(QThread):
                         f"Exporting "
                         f"{self._frames_to_tc(frame, fps_float)}"
                         f" ({pct}%)  "
-                        f"{_fps_est:.1f} fps  "
-                        f"~{_remain:.1f} min remaining"
+                        f"{_fps_est:.0f} fps  "
+                        f"~{_remain:.0f} min remaining"
                     )
 
             # Flush
