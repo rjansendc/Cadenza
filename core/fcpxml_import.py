@@ -9,15 +9,15 @@ What comes across:
   - sequence size and frame rate
   - video and audio tracks, created to match the file
   - clips: source file, timeline position, in/out points, enabled state
-  - Basic Motion: scale, rotation, centre (as Position X/Y), crop,
+  - Basic Motion: scale, rotation, center (as Position X/Y), crop,
     anti-flicker
   - Opacity and Audio Levels, including keyframes
-  - clip label colours
+  - clip label colors
   - audio/video linking, rebuilt by matching source and timing, since
     Premiere's export carries no <link> elements
 
 What does not:
-  - transitions, speed changes, titles, colour grades and any other
+  - transitions, speed changes, titles, color grades and any other
     effect with no Cadenza equivalent (reported, not silently dropped)
   - per-channel audio volume, which Premiere itself fails to translate
 
@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# Premiere's label names -> Cadenza clip colours
+# Premiere's label names -> Cadenza clip colors
 LABEL_COLORS = {
     'Violet':    '#9b7ede',
     'Iris':      '#5b6ee1',
@@ -243,8 +243,8 @@ class FCPXMLImporter:
                 self._set_param(clip, motion, 'anti_flicker', p, kfs,
                                 lambda v: v)
             elif pid == 'center':
-                # centre is a fraction of the frame away from the middle:
-                # 0 = centred, +0.5 = one half-frame right/down
+                # center is a fraction of the frame away from the middle:
+                # 0 = centered, +0.5 = one half-frame right/down
                 v = p.find('value')
                 if v is not None:
                     h = _float(v.findtext('horiz'), 0.0)
@@ -435,7 +435,7 @@ class FCPXMLImporter:
         if motion is not None and is_video:
             motion.set('scale',
                        self._fit_percent(clip, canvas_w, canvas_h))
-            motion.centre_anchor(clip.source_width, clip.source_height)
+            motion.center_anchor(clip.source_width, clip.source_height)
 
         self._apply_filters(clip, ci, canvas_w, canvas_h, clip.name)
 

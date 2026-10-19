@@ -490,10 +490,10 @@ class ParameterWidget(QWidget):
             return
         self._kf_state = state
 
-        text, colour, tip = state
+        text, color, tip = state
         self.keyframe_btn.setText(text)
         self.keyframe_btn.setToolTip(tip)
-        self.keyframe_btn.setStyleSheet(self._KF_STYLES[colour])
+        self.keyframe_btn.setStyleSheet(self._KF_STYLES[color])
 
     def _on_playhead_moved(self, _frame=None, force=False):
         """
@@ -564,7 +564,7 @@ class ParameterWidget(QWidget):
 
         ParamDef defaults are fixed numbers, which is wrong for
         anything measured in source pixels: Anchor defaults to 960x540,
-        the centre of a 1080p frame only, so resetting it on a 4K clip
+        the center of a 1080p frame only, so resetting it on a 4K clip
         used to move the picture rather than restore it.
         """
         name = self.param_def.name
@@ -738,7 +738,7 @@ class EffectSectionWidget(QWidget):
         """
         Scale Width only applies while Uniform Scale is off
         (then Scale is height and Scale Width is width).
-        Grey it out while Uniform Scale is ticked, as Premiere does.
+        Gray it out while Uniform Scale is ticked, as Premiere does.
         """
         rows = {w.param_def.name: w for w in self.parameter_widgets}
         uniform_row = rows.get('uniform_scale')

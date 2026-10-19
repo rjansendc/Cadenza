@@ -61,7 +61,7 @@ def load_project(filepath: str) -> 'Project':
         too_new = int(version) > PROJECT_VERSION
     except (TypeError, ValueError):
         raise ValueError(
-            f'Unrecognised project version {version!r}'
+            f'Unrecognized project version {version!r}'
         )
     if too_new:
         raise ValueError(
@@ -375,7 +375,7 @@ def _deserialize_clip(data: dict) -> 'Clip':
             eff.set(name, value)
 
     # projects saved before the anchor did anything carry 960x540,
-    # which is only the centre of a 1080p source
+    # which is only the center of a 1080p source
     clip.migrate_anchor()
 
     # restore envelopes

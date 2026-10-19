@@ -157,11 +157,11 @@ def test_survives_save_and_load(tmp_path):
     assert before == after
 
 
-def test_label_colours_are_mapped():
+def test_label_colors_are_mapped():
     xml_path = SAMPLES[0]
     if not os.path.exists(xml_path):
         pytest.skip('sample export not present')
 
     project, _ = import_fcpxml(xml_path)
-    colours = {c.label_color for c in project.clips.values()}
-    assert colours & set(LABEL_COLORS.values())
+    colors = {c.label_color for c in project.clips.values()}
+    assert colors & set(LABEL_COLORS.values())

@@ -788,93 +788,70 @@ class TrackCanvas(QGraphicsView):
     # ── Waveform workers ─────────────────────────────────
 
     def _start_waveform_worker(self, clip):
-        from media.waveform_worker import WaveformWorker
-        from media.waveform import load_peaks
-        fp = clip.filepath
+        """
+        Fetch this clip's waveform.
 
-        # 1. check disk cache first — instant
-        cached = load_peaks(fp)
+        A clip carries the stream it came from: stream_index 1 is the
+        first audio stream, 2 the second, and so on. That has to reach
+        the decoder, or every track of a multitrack recording draws
+        the first stream's waveform while playing its own.
+        """
+        from media.waveform import load_peaks
+        from media.waveform_worker import waveform_queue
+        from pathlib import Path
+
+        fp = clip.filepath
+        # stream_index counts every stream, video included; the
+        # waveform code wants the position among the audio ones
+        audio_index = max(0, (clip.stream_index or 0) - 1)
+
+        # the disk cache answers instantly when it is there
+        cached = load_peaks(fp, audio_index)
         if cached is not None:
             self._on_waveform_ready(fp, cached, clip.id)
             return
 
-        # 2. reuse mainwindow worker if running
-        main = self.window()
-        if hasattr(main, '_waveform_workers'):
-            w = main._waveform_workers.get(fp)
-            if w is not None:
-                if w.isRunning():
-                    # connect and wait — don't start new
-                    w.completed.connect(
-                        lambda f, p, c=clip:
-                        self._on_waveform_ready(
-                            f, p, c.id
-                        )
-                    )
-                    return
-                else:
-                    # finished — check cache again
-                    cached2 = load_peaks(fp)
-                    if cached2 is not None:
-                        self._on_waveform_ready(
-                            fp, cached2, clip.id
-                        )
-                        return
-
-        # 3. reuse canvas worker if running
-        if fp in self._waveform_workers:
-            w = self._waveform_workers[fp]
-            if w.isRunning():
-                w.completed.connect(
-                    lambda f, p, c=clip:
-                    self._on_waveform_ready(f, p, c.id)
-                )
-                return
-        from pathlib import Path
-        from media.waveform_worker import waveform_queue
         name = Path(fp).name
+        if audio_index:
+            name = f'{name} [{audio_index + 1}]'
 
         def _ready(f, peaks, c=clip, n=name):
             self._on_waveform_ready(f, peaks, c.id)
             self._on_waveform_done(n)
 
-        # the queue decodes a couple of files at a time and joins
-        # duplicate requests, so the same file on several tracks is
-        # only ever read once
+        # the queue decodes a couple of streams at a time and joins
+        # duplicate requests, so the same stream is only read once
         waveform_queue.submit(
             fp,
+            audio_index,
             completed=_ready,
             progress=lambda f, pct, n=name:
                 self._on_waveform_progress(n, pct),
         )
 
-    def _on_waveform_progress(self,
-                               name: str,
-                               pct: int):
-        """Forward progress to mainwindow status bar."""
+    def _status_label(self):
+        """
+        The main window's status label, found by walking up the
+        parents. The canvas sits several widgets below it.
+        """
         main = self.parent()
-        while main:
+        while main is not None:
             if hasattr(main, 'status_label'):
-                main.status_label.setText(
-                    f'Waveform: {name} {pct}%'
-                )
-                return
-            main = main.parent() if hasattr(
-                main, 'parent'
-            ) else None
+                return main.status_label
+            main = main.parent() if hasattr(main, 'parent') else None
+        return None
+
+    def _on_waveform_progress(self, name: str, pct: int):
+        """Forward progress to the main window status bar."""
+        label = self._status_label()
+        if label is not None:
+            label.setText(f'Waveform: {name} {pct}%')
 
     def _on_waveform_done(self, name: str):
-        """Clear progress from status bar."""
-        main = self.parent()
-        while main:
-            if hasattr(main, 'status_label'):
-                main.status_label.setText(
-                    f'Waveform ready: {name}'
-                )
-                return
-            main = main.parent() if hasattr(
-                main, 'parent'
-            ) else None
+        """Clear progress from the status bar."""
+        label = self._status_label()
+        if label is not None:
+            label.setText(f'Waveform ready: {name}')
 
     def _on_waveform_ready(self, fp, peaks, clip_id):
         if peaks is None:

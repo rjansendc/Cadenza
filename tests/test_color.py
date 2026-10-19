@@ -1,13 +1,13 @@
 """
-The colour that comes out is the colour that went in.
+The color that comes out is the color that went in.
 
 The exporter converted RGB to YUV with BT.601 coefficients for every
 frame, while gpu/yuv.py decodes HD as BT.709 and players assume the
-same for an untagged HD stream. Greys were untouched, so it looked
-fine — but saturated colour shifted by up to 24 levels, which on
+same for an untagged HD stream. Grays were untouched, so it looked
+fine — but saturated color shifted by up to 24 levels, which on
 concert footage is exactly the stage lighting.
 
-Nothing tagged the stream's colour either, leaving the player to guess
+Nothing tagged the stream's color either, leaving the player to guess
 from the frame size.
 """
 
@@ -29,7 +29,7 @@ PATCHES = {
     'green':     (30, 200, 60),
     'blue':      (40, 60, 220),
     'skin':      (222, 184, 154),
-    'grey':      (128, 128, 128),
+    'gray':      (128, 128, 128),
     'white':     (235, 235, 235),
     'stage red': (200, 20, 40),
     'cyan':      (0, 180, 200),
@@ -37,7 +37,7 @@ PATCHES = {
 
 
 def patch_frame(width, height):
-    """Horizontal bands, one per test colour."""
+    """Horizontal bands, one per test color."""
     img = torch.zeros(height, width, 3, dtype=torch.uint8)
     band = max(1, height // len(PATCHES))
     for i, rgb in enumerate(PATCHES.values()):
@@ -59,7 +59,7 @@ def test_hd_uses_bt709_and_sd_bt601(height, expected):
 
 
 def test_the_decoder_agrees():
-    """If these two ever disagree, every export shifts colour."""
+    """If these two ever disagree, every export shifts color."""
     from gpu import yuv
     for height in (1080, 480):
         encoder_kr, _kg, encoder_kb = matrix_for(height)
@@ -82,11 +82,11 @@ def test_a_standard_definition_frame_is_tagged_bt601():
     assert frame.colorspace == av.video.reformatter.Colorspace.ITU601
 
 
-# ── and the colour survives ───────────────────────────────────
+# ── and the color survives ───────────────────────────────────
 
 @pytest.mark.parametrize('width,height', [(1920, 1080), (1280, 720),
                                           (720, 480)])
-def test_colours_round_trip_within_a_few_levels(width, height):
+def test_colors_round_trip_within_a_few_levels(width, height):
     img, band = patch_frame(width, height)
     back = tensor_to_av_frame_fast(img).to_ndarray(format='rgb24')
 
@@ -94,12 +94,12 @@ def test_colours_round_trip_within_a_few_levels(width, height):
         got = back[i * band + band // 2, width // 2]
         error = max(abs(int(a) - int(b)) for a, b in zip(got, rgb))
         # 4:2:0 subsampling and 8-bit limited range cost a little;
-        # a wrong matrix cost five times this on saturated colour
+        # a wrong matrix cost five times this on saturated color
         assert error <= 6, f'{name}: {tuple(int(v) for v in got)} != {rgb}'
 
 
-def test_saturated_colour_is_where_it_used_to_go_wrong():
-    """Greys always survived a mismatched matrix; green did not."""
+def test_saturated_color_is_where_it_used_to_go_wrong():
+    """Grays always survived a mismatched matrix; green did not."""
     img, band = patch_frame(1920, 1080)
     back = tensor_to_av_frame_fast(img).to_ndarray(format='rgb24')
     index = list(PATCHES).index('green')

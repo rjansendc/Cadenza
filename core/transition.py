@@ -1,7 +1,7 @@
 """
 Transitions — currently the cross dissolve.
 
-A transition sits at a cut on one video track and is centred on it: for
+A transition sits at a cut on one video track and is centered on it: for
 a 30 frame dissolve at frame 900, the mix runs from 885 to 915. The
 outgoing clip keeps playing past its out point and the incoming one
 starts before its in point, which is what "handles" means — those
@@ -26,7 +26,7 @@ DEFAULT_DURATION = 30          # frames — about a second at 29.97
 
 @dataclass
 class Transition:
-    """A dissolve centred on a cut, on one track."""
+    """A dissolve centered on a cut, on one track."""
 
     track:        int                      # track index
     center_frame: int                      # the cut it straddles
@@ -86,7 +86,7 @@ def max_duration(clips, track: int, center: int) -> int:
     """
     The longest dissolve that fits at this cut.
 
-    It cannot eat more than either neighbour's length, or the mix would
+    It cannot eat more than either neighbor's length, or the mix would
     run past the far end of a clip and reveal whatever is underneath.
     """
     outgoing = incoming = None

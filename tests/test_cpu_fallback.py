@@ -97,9 +97,9 @@ def test_a_scaled_clip_lands_where_it_should():
     comp = compositor()
     out, _cov = comp._apply_motion(
         frame_on('cpu'), motion(scale=50.0), 1.0)
-    centre = out[comp.height // 2, comp.width // 2]
+    center = out[comp.height // 2, comp.width // 2]
     corner = out[0, 0]
-    assert float(centre.mean()) > 1.0      # picture in the middle
+    assert float(center.mean()) > 1.0      # picture in the middle
     assert float(corner.mean()) == 0.0     # empty canvas around it
 
 

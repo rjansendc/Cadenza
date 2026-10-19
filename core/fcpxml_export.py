@@ -8,13 +8,13 @@ handed to someone who does not have Cadenza.
 What goes across:
   - sequence size and frame rate (NTSC flagged where it applies)
   - video and audio tracks, with clips: source, position, in/out points,
-    enabled state and label colour
-  - Basic Motion from the Motion effect: scale, rotation, centre, crop
+    enabled state and label color
+  - Basic Motion from the Motion effect: scale, rotation, center, crop
   - Opacity and Audio Levels, including keyframes
 
 What does not:
   - anchor point, which Basic Motion has no equivalent for
-  - cross dissolves, time remapping and Lumetri colour
+  - cross dissolves, time remapping and Lumetri color
 Anything dropped is listed in the report rather than lost silently.
 
 Known gap, not yet investigated: Premiere opens the sequence and the
@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-# Cadenza label colours -> Premiere's names, for round tripping
+# Cadenza label colors -> Premiere's names, for round tripping
 from core.fcpxml_import import LABEL_COLORS
 
 COLOR_LABELS = {v: k for k, v in LABEL_COLORS.items()}
@@ -277,9 +277,9 @@ class FCPXMLExporter:
         _parameter(eff, 'rotation', 'Rotation',
                    round(motion.get('rotation') or 0.0, 4), -8640, 8640)
 
-        # centre is a fraction of the frame away from the middle
-        centre = _parameter(eff, 'center', 'Center', None)
-        value = ET.SubElement(centre, 'value')
+        # center is a fraction of the frame away from the middle
+        center = _parameter(eff, 'center', 'Center', None)
+        value = ET.SubElement(center, 'value')
         pos_x = motion.get('position_x')
         pos_y = motion.get('position_y')
         if pos_x is None:

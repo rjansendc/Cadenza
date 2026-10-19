@@ -32,10 +32,10 @@ class ExportThread(QThread):
         self.clips       = clips
         self.sequence    = sequence
         self.compositor  = compositor
-        self._cancelled  = False
+        self._canceled  = False
 
     def cancel(self):
-        self._cancelled = True
+        self._canceled = True
 
     def run(self):
         # ensure decord uses torch bridge in this thread
@@ -134,9 +134,9 @@ class ExportThread(QThread):
             a_stream.codec_context.bit_rate = self._parse_bitrate(
                 config.audio_bitrate)
 
-            # Tag the colour so a player does not have to guess.
+            # Tag the color so a player does not have to guess.
             # Nothing was written before, and the frames were encoded
-            # with the wrong matrix besides, so saturated colour came
+            # with the wrong matrix besides, so saturated color came
             # back shifted.
             try:
                 import av.video.reformatter as _reformat
@@ -148,7 +148,7 @@ class ExportThread(QThread):
                 v_stream.codec_context.color_trc = 1 if hd else 6
                 v_stream.codec_context.color_range = 1   # limited/TV
             except Exception as exc:
-                print(f'[Export] colour metadata not set: {exc}')
+                print(f'[Export] color metadata not set: {exc}')
 
             # Explicit time bases for accurate A/V sync
             # Video: 1 unit = 1 frame
@@ -182,8 +182,8 @@ class ExportThread(QThread):
 
             _t_decode = _t_yuv = _t_encode = 0.0
             for i, frame in enumerate(range(start_frame, end_frame)):
-                if self._cancelled:
-                    self.status.emit("Export cancelled.")
+                if self._canceled:
+                    self.status.emit("Export canceled.")
                     return
 
                 # Video

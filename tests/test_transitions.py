@@ -30,7 +30,7 @@ def video_clip(start, duration, track=0, **kw):
 
 # ── geometry ──────────────────────────────────────────────────────
 
-def test_dissolve_is_centred_on_the_cut():
+def test_dissolve_is_centered_on_the_cut():
     tr = Transition(track=0, center_frame=900, duration=30)
     assert tr.start_frame == 885
     assert tr.end_frame == 915
@@ -77,12 +77,12 @@ def test_cut_points_ignore_other_tracks():
     assert cut_points(clips, 1) == [50]
 
 
-def test_max_duration_is_the_shorter_neighbour():
+def test_max_duration_is_the_shorter_neighbor():
     clips = [video_clip(0, 100), video_clip(100, 40)]
     assert max_duration(clips, 0, 100) == 40
 
 
-def test_max_duration_zero_without_a_neighbour():
+def test_max_duration_zero_without_a_neighbor():
     clips = [video_clip(0, 100)]
     assert max_duration(clips, 0, 100) == 0
 

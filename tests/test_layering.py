@@ -40,7 +40,7 @@ def comp():
     return Compositor(Sequence())
 
 
-def grey_frame(h=1080, w=1920):
+def gray_frame(h=1080, w=1920):
     return torch.zeros(h, w, 3, dtype=torch.float32) + 128.0
 
 
@@ -48,13 +48,13 @@ def grey_frame(h=1080, w=1920):
 
 def test_a_full_frame_clip_reports_full_coverage():
     """None means 'covers everything' — the fast path stays fast."""
-    _rgb, coverage = comp()._apply_motion(grey_frame(), motion(), 1.0)
+    _rgb, coverage = comp()._apply_motion(gray_frame(), motion(), 1.0)
     assert coverage is None
 
 
 def test_a_scaled_clip_reports_partial_coverage():
     c = comp()
-    _rgb, coverage = c._apply_motion(grey_frame(), motion(scale=50.0), 1.0)
+    _rgb, coverage = c._apply_motion(gray_frame(), motion(scale=50.0), 1.0)
     assert coverage is not None
     assert coverage.shape == (1, 1, c.height, c.width)
     covered = float(coverage.mean())
@@ -64,7 +64,7 @@ def test_a_scaled_clip_reports_partial_coverage():
 def test_coverage_is_where_the_picture_is():
     c = comp()
     _rgb, coverage = c._apply_motion(
-        grey_frame(), motion(scale=30.0, position_x=1500.0,
+        gray_frame(), motion(scale=30.0, position_x=1500.0,
                              position_y=850.0), 1.0)
     mask = coverage[0, 0]
     assert float(mask[850, 1500]) == pytest.approx(1.0)   # in the pip
@@ -74,13 +74,13 @@ def test_coverage_is_where_the_picture_is():
 def test_a_cropped_clip_leaves_canvas_showing():
     c = comp()
     _rgb, coverage = c._apply_motion(
-        grey_frame(), motion(crop_left=50.0), 1.0)
+        gray_frame(), motion(crop_left=50.0), 1.0)
     assert float(coverage.mean()) < 0.75
 
 
 def test_a_rotated_clip_leaves_its_corners_empty():
     c = comp()
-    _rgb, coverage = c._apply_motion(grey_frame(), motion(rotation=20.0), 1.0)
+    _rgb, coverage = c._apply_motion(gray_frame(), motion(rotation=20.0), 1.0)
     mask = coverage[0, 0]
     assert float(mask[0, 0]) == 0.0
     assert float(mask[c.height // 2, c.width // 2]) == pytest.approx(1.0)
@@ -131,7 +131,7 @@ def test_a_pip_on_v2_leaves_v1_visible(two_pngs):
 
 
 def test_a_full_frame_clip_on_v2_still_covers_v1(two_pngs):
-    """The optimisation has to keep working: a full-frame opaque clip
+    """The optimization has to keep working: a full-frame opaque clip
     replaces what is under it."""
     c = comp()
     c.use_proxies = False

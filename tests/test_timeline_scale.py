@@ -1,7 +1,7 @@
 """
 The timeline scale is absolute: pixels per frame.
 
-Editing must never change it. It used to be a normalised fraction of
+Editing must never change it. It used to be a normalized fraction of
 the project length, so every drop, stretch or delete rescaled the whole
 timeline — six identical stills ended up drawn at six different widths.
 """
@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
 
-from ui.constants import (DEFAULT_VISIBLE_FRAMES, SCROLL_PAD_FRAMES,
+from ui.constants import (DEFAULT_VISIBLE_FRAMES, SCROLL_PAD_FRACTION,
                           MIN_VISIBLE_FRAMES, STILL_IMAGE_SECONDS)
 
 try:
@@ -86,9 +86,45 @@ def test_scroll_range_follows_content_with_room_to_spare():
     s = state()
     assert s.scroll_frames == DEFAULT_VISIBLE_FRAMES      # empty
     s.total_frames = DEFAULT_VISIBLE_FRAMES * 2
-    assert s.scroll_frames == DEFAULT_VISIBLE_FRAMES * 2 + SCROLL_PAD_FRAMES
     # there is always empty timeline past the last clip to drop into
     assert s.scroll_frames > s.total_frames
+
+
+def test_the_room_past_the_last_clip_is_a_share_of_the_screen():
+    """A fixed frame count is a shrinking share of the width as a
+    project grows: 900 frames is under 1% of an hour-long timeline
+    zoomed to fit — about nine pixels, with nowhere to drop a clip."""
+    for frames in (17982, 107892, 323676):        # 10 min, 1 hr, 3 hr
+        s = state()
+        s.total_frames = frames
+        s.zoom_to_fit(0, frames)
+        pad_px = (s.scroll_frames - s.total_frames) * s.px_per_frame
+        assert pad_px == pytest.approx(CANVAS * SCROLL_PAD_FRACTION,
+                                       rel=0.02), frames
+
+
+def test_the_room_does_not_shrink_as_the_project_grows():
+    short, long = state(), state()
+    short.total_frames = 17982
+    short.zoom_to_fit(0, 17982)
+    long.total_frames = 323676
+    long.zoom_to_fit(0, 323676)
+    short_px = (short.scroll_frames - short.total_frames) * short.px_per_frame
+    long_px  = (long.scroll_frames - long.total_frames) * long.px_per_frame
+    assert long_px == pytest.approx(short_px, rel=0.02)
+
+
+def test_zoomed_in_the_room_does_not_become_a_wasteland():
+    """Proportional cuts both ways: a quarter of a tight zoom is a
+    few frames, not the 900 that used to be appended regardless —
+    which was seven screens of empty timeline to scroll back over."""
+    s = state()
+    s.total_frames = 107892
+    for _ in range(12):
+        s.zoom_in_at_position(0.5, factor=0.5)
+    pad = s.scroll_frames - s.total_frames
+    assert 0 < pad < 900
+    assert pad == pytest.approx(s.visible_frames * SCROLL_PAD_FRACTION)
 
 
 def test_total_frames_announces_itself():

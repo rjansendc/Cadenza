@@ -285,7 +285,7 @@ def generate_proxy(filepath: str,
     if the source could not be read.
 
     progress is called with a percentage, so a long transcode can be
-    reported and cancelled by the caller raising inside it.
+    reported and canceled by the caller raising inside it.
     """
     import av
 

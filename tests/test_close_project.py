@@ -196,7 +196,7 @@ def test_save_on_quit_writes_the_file(
 
 def test_a_save_that_does_not_happen_stops_the_close(
         window, stills, monkeypatch):
-    """Save As can be cancelled, which leaves the project dirty —
+    """Save As can be canceled, which leaves the project dirty —
     closing anyway would throw the work away."""
     load(window, stills)
     window.project.project_path = None         # forces Save As

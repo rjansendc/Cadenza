@@ -24,7 +24,7 @@ def _extract_audio(filepath: str,
                    sample_rate: int = 8000) -> Optional[np.ndarray]:
     """
     Extract audio from filepath starting at start_seconds for duration_seconds.
-    Returns normalised float32 array or None on failure.
+    Returns normalized float32 array or None on failure.
     """
     try:
         import av
@@ -98,19 +98,34 @@ def _find_best_signal_window(
     ref_fps = ref_clip.source_fps or fps
     cmp_fps = cmp_clip.source_fps or fps
 
-    # Test just 8 evenly-spaced candidate positions through the overlap
-    available = overlap_end_tl - window_size - overlap_start_tl
-    if available <= 0:
+    # Candidate positions for the window inside the overlap. The
+    # slack is whatever room is left once the window is placed; when
+    # the window exactly fills the overlap there is still one valid
+    # position, and that case has to be kept.
+    #
+    # This used to subtract window_size here as well as in the caller,
+    # so a scan needed more than twice the window to run at all. With
+    # window_size capped at analysis_seconds that meant no overlap
+    # under four minutes could ever be scanned, and sync reported
+    # "no alignment found" however well the clips lined up.
+    slack = overlap_end_tl - overlap_start_tl - window_size
+    if slack < 0:
+        print(f"[Sync]   window {window_size:.1f}s does not fit in "
+              f"{overlap_end_tl - overlap_start_tl:.1f}s of overlap")
         return None
-    num_candidates = min(8, max(1, int(available / 30)))
-    step = available / num_candidates if num_candidates > 1 else available
+
+    num_candidates = min(8, max(1, int(slack // 30) + 1))
+    if num_candidates > 1:
+        positions = [overlap_start_tl + slack * k / (num_candidates - 1)
+                     for k in range(num_candidates)]
+    else:
+        positions = [overlap_start_tl]
 
     best_rms = -1.0
     best_ref_src = None
     best_cmp_src = None
 
-    pos = overlap_start_tl
-    while pos + window_size <= overlap_end_tl:
+    for pos in positions:
         # Convert timeline position to source file positions
         ref_src = (ref_clip.in_point / ref_fps) + (pos - ref_clip.start_frame / fps)
         cmp_src = (cmp_clip.in_point / cmp_fps) + (pos - cmp_clip.start_frame / fps)
@@ -118,7 +133,6 @@ def _find_best_signal_window(
         print(f"[Sync]   scan pos={pos:.1f}s → ref_src={ref_src:.1f}s cmp_src={cmp_src:.1f}s")
         if ref_src < 0 or cmp_src < 0:
             print(f"[Sync]   skipping negative source position")
-            pos += step
             continue
 
         # Sample 2 seconds of audio to check RMS
@@ -127,7 +141,6 @@ def _find_best_signal_window(
         cmp_probe = _extract_audio(cmp_clip.filepath, cmp_src, probe_dur, sample_rate)
 
         if ref_probe is None or cmp_probe is None:
-            pos += step
             continue
 
         ref_rms = _rms(ref_probe)
@@ -136,7 +149,6 @@ def _find_best_signal_window(
         # Both must be above silence threshold
         if ref_rms < silence_threshold or cmp_rms < silence_threshold:
             print(f"[Sync]   t={pos:.0f}s: skipping (RMS ref={ref_rms:.4f} cmp={cmp_rms:.4f} — too quiet)")
-            pos += step
             continue
 
         # Score = minimum of the two RMS values (weakest link)
@@ -147,8 +159,6 @@ def _find_best_signal_window(
             best_rms = score
             best_ref_src = ref_src
             best_cmp_src = cmp_src
-
-        pos += step
 
     if best_ref_src is None:
         return None
@@ -259,7 +269,7 @@ def sync_clips_to_reference(
         print(f"[Sync] Scanning for best signal...")
         window = _find_best_signal_window(
             reference_clip, clip,
-            sample_region_start, sample_region_end - window_size,
+            sample_region_start, sample_region_end,
             window_size, fps, 4000  # use low rate for fast signal scan
         )
 
@@ -303,17 +313,29 @@ def sync_clips_to_reference(
 
             search_corr = corr[lo:hi]
 
-            # Envelope peak detection: smooth abs(corr) to find the
-            # center of the correlation hill, then refine with raw corr
-            # Envelope peak: downsample corr for fast Gaussian, map peak back
+            # Envelope peak detection: find the centre of the
+            # correlation hill, then refine against the raw curve.
+            #
+            # The envelope has to be built by pooling |corr| over
+            # blocks, not by taking every ds-th sample. A correlation
+            # peak is a spike a few samples wide, so point decimation
+            # drops it altogether — ds-1 times out of ds — leaving a
+            # curve of near-random values whose smoothed argmax lands
+            # anywhere. The refine step then locked onto whatever
+            # local maximum sat near that arbitrary spot, so even two
+            # copies of the same audio at zero offset could report a
+            # correction of several seconds. Pooling keeps the spike
+            # in whichever block contains it.
             from scipy.ndimage import gaussian_filter1d
-            ds = 100  # downsample factor — 100x faster filter
-            corr_ds = search_corr[::ds]
-            sigma_ds = max(1, sample_rate // ds)  # 1s in downsampled space
-            env_ds   = gaussian_filter1d(np.abs(corr_ds), sigma=sigma_ds)
+            ds = 100  # pool width — keeps the Gaussian ~100x cheaper
+            mag    = np.abs(search_corr)
+            usable = len(mag) - (len(mag) % ds)
+            pooled = mag[:usable].reshape(-1, ds).max(axis=1)
+            sigma_ds = max(1.0, sample_rate / ds)  # 1s in pooled space
+            env_ds   = gaussian_filter1d(pooled, sigma=sigma_ds)
             env_peak_ds = int(np.argmax(env_ds))
-            # Map back to full-res and refine within ±1s window
-            env_peak = env_peak_ds * ds
+            # Map back to full-res (block centre) and refine within ±1s
+            env_peak = env_peak_ds * ds + ds // 2
             refine_r = sample_rate  # ±1s in full-res samples
             lo_r = max(0, env_peak - refine_r)
             hi_r = min(len(search_corr), env_peak + refine_r + 1)
@@ -321,7 +343,12 @@ def sync_clips_to_reference(
 
             offset_samp = (lo + peak_idx) - zero_lag
             offset_secs = offset_samp / sample_rate
-            frame_offset = int(offset_secs * fps)
+            # Round, do not truncate. The correlation lag is quantised
+            # to the analysis sample rate, so an exact 45 frame offset
+            # measures as -1.50150s where the exact value is
+            # -1.501502s — and int() truncating toward zero threw the
+            # whole frame away. Every result came back one frame short.
+            frame_offset = int(round(offset_secs * fps))
 
             # Absolute recording offset:
             # At the sample window, ref is at ref_src seconds into its file

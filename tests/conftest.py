@@ -4,7 +4,7 @@ Shared test setup.
 Only one thing here: make `sounddevice` importable. ui/audio_output.py
 imports it at module scope, so MainWindow cannot be built without it,
 and a machine with no PortAudio (a container, or CI) would be unable
-to test any of the window behaviour.
+to test any of the window behavior.
 
 On a real machine with PortAudio installed this does nothing at all.
 """

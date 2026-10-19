@@ -356,7 +356,7 @@ class VideoDecoder:
         Upload the decoded frame as RGB on the GPU.
 
         Converting YUV->RGB on the GPU instead of asking PyAV for
-        'rgb24' saves the CPU colour conversion and halves the bytes
+        'rgb24' saves the CPU color conversion and halves the bytes
         transferred (1080p: 1.47ms/6.2MB -> 0.18ms/3.1MB; a 4K frame
         is four times that). Any format the fast path does not handle
         falls back to libswscale.

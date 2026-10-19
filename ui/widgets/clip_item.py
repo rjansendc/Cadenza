@@ -375,7 +375,7 @@ class ClipItem(QGraphicsRectItem):
             return None
         if len(mine) == 1:
             return mine[0]
-        # both ends meet a neighbour — take the nearer to the click
+        # both ends meet a neighbor — take the nearer to the click
         rect = self.rect()
         halfway = rect.left() + rect.width() / 2
         return min(mine) if pos.x() < halfway else max(mine)
@@ -505,7 +505,7 @@ class ClipItem(QGraphicsRectItem):
         y = self._keyframe_marker_y(rect)
 
         painter.setPen(QPen(QColor('#e0e0e0'), 0.8))   # light edge to lift
-        for f in frames:                  # off black clip colours
+        for f in frames:                  # off black clip colors
             # the one being dragged reads back from Effect Controls blue
             painter.setBrush(QColor(
                 '#4a9de0' if f == self._kf_drag_frame else '#000000'))
@@ -746,11 +746,11 @@ class ClipItem(QGraphicsRectItem):
 
         menu.addSeparator()
 
-        # Scale to Frame Size — video clips only
+        # Set to Frame Size — video clips only
         act_scale = None
         if self.clip.has_video:
             act_scale = menu.addAction(
-                'Scale to Frame Size'
+                'Set to Frame Size'
             )
 
         # Cross dissolve at whichever end of this clip meets another
@@ -834,18 +834,10 @@ class ClipItem(QGraphicsRectItem):
             self._remove_dissolve(self._nearest_cut(event.pos()))
 
         elif act_scale and action == act_scale:
-            seq = main.project.active_sequence
-            if seq:
-                self.clip.scale_to_frame(
-                    seq.settings.width,
-                    seq.settings.height
-                )
-                main.status_label.setText(
-                    'Scaled to frame size'
-                )
-                main._playback._compositor\
-                    .invalidate_cache()
-                main._scrub_to_playhead()
+            # the window owns this: it refreshes the Effects panel and
+            # makes the change undoable, which fitting the clip here
+            # by hand did not
+            main.scale_clips_to_frame([self.clip])
 
         elif act_sync and action == act_sync:
             main._on_synchronize()
@@ -1233,9 +1225,6 @@ class ClipItem(QGraphicsRectItem):
                 self.track_type() and
                 target_row.track.index != new_track):
             new_track = target_row.track.index
-
-        if self._would_overlap(new_frame, new_track):
-            return
 
         # ── cross-track move ───────────────────────────
         if (panel and target_row and
@@ -1639,6 +1628,59 @@ class ClipItem(QGraphicsRectItem):
                                      item.clip.start_frame,
                                      old_t, item.clip.track))
 
+            # Settle the clips onto tracks with room.
+            #
+            # Two clips must never hold the same frames on one track:
+            # nothing on screen says which one is being heard or
+            # seen, and the only way back is undo. So a clip that
+            # lands on occupied timeline moves to the nearest track
+            # that is free over its own span, keeping the time it was
+            # dropped at. If every track of its kind is busy there,
+            # the move is refused and the clip goes home.
+            #
+            # This used to be a refusal that consulted
+            # self.scene().items() — one QGraphicsScene per timeline
+            # row — so it compared the destination track number
+            # against clips in the *source* row, matched nothing, and
+            # let the clip land on top. Same-track drags were
+            # refused; cross-track drags were never checked.
+            project = panel.project if panel else None
+            nudged = []
+            blocked = False
+            if project is not None and moved_clips:
+                seq = project.active_sequence
+                unresolved = {c.id for c, _of, _nf, _ot, _nt in moved_clips}
+                for i, (clip, old_f, new_f, old_t, new_t) in enumerate(
+                        list(moved_clips)):
+                    unresolved.discard(clip.id)
+                    free = project.nearest_free_track(
+                        new_t,
+                        clip.start_frame,
+                        clip.start_frame + clip.duration,
+                        bool(clip.has_audio),
+                        exclude_ids=unresolved | {clip.id},
+                        seq=seq)
+                    if free is None:
+                        blocked = True
+                        break
+                    if free != new_t:
+                        clip.track = free
+                        moved_clips[i] = (clip, old_f, new_f, old_t, free)
+                        nudged.append(clip)
+
+            if blocked:
+                # put everything back where it came from
+                for clip, old_f, _nf, old_t, _nt in moved_clips:
+                    clip.start_frame = old_f
+                    clip.track       = old_t
+                moved_clips = []
+                if panel:
+                    panel.refresh()
+                main = self._get_main_window()
+                if main:
+                    main.status_label.setText(
+                        'Every track is occupied there — move refused')
+
             if moved_clips:
                 if len(moved_clips) == 1:
                     clip, old_f, new_f, old_t, new_t = moved_clips[0]
@@ -1651,39 +1693,22 @@ class ClipItem(QGraphicsRectItem):
                             clip, old_f, new_f, old_t, new_t))
                     undo_stack.push(cmd)
 
+                # a clip that changed track has moved to another row,
+                # so the rows have to be rebuilt rather than nudged
+                if nudged and panel:
+                    panel.refresh()
+                    main = self._get_main_window()
+                    if main:
+                        names = ', '.join(
+                            ('A' if c.has_audio else 'V') + str(c.track + 1)
+                            for c in nudged)
+                        main.status_label.setText(
+                            f'Track was occupied — moved to {names}')
+
         self._drag_start = None
         if moved_clips:
             self._sync_total_frames()
         event.accept()
-
-    def _would_overlap(self, new_frame: int,
-                        new_track: int) -> bool:
-        """
-        Returns True if placing this clip at
-        new_frame on new_track overlaps any
-        other clip on that track.
-        """
-        duration = self.clip.duration
-        new_end  = new_frame + duration
-
-        for item in self.scene().items():
-            if not isinstance(item, ClipItem):
-                continue
-            if item.clip.id == self.clip.id:
-                continue
-            if item.clip.track != new_track:
-                continue
-            # only compare same stream type
-            if item.clip.has_video != self.clip.has_video:
-                continue
-            other_start = item.clip.start_frame
-            other_end   = (other_start +
-                           item.clip.duration)
-            # overlap if ranges intersect
-            if not (new_end <= other_start or
-                    new_frame >= other_end):
-                return True
-        return False
 
     # =========================================================
     # Selection / Hover

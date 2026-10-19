@@ -180,7 +180,7 @@ class SyncDialog(QDialog):
         group_layout = QVBoxLayout(group)
         group_layout.setSpacing(6)
 
-        # Greyed-out options (not implemented) — match Premiere look
+        # Grayed-out options (not implemented) — match Premiere look
         for label in ("Clip Start", "Clip End"):
             rb = QRadioButton(label)
             rb.setEnabled(False)

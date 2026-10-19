@@ -35,7 +35,7 @@ def qapp():
 
 @pytest.fixture
 def two_pngs_for_export(tmp_path, qapp):
-    """Two flat colours on disk for the compositor to decode."""
+    """Two flat colors on disk for the compositor to decode."""
     from PySide6.QtGui import QImage, QColor
     paths = {}
     for name, rgb in (('bg', (200, 0, 0)), ('fg', (0, 200, 0))):
@@ -118,11 +118,11 @@ def test_rate_and_audio_survive_the_dialog(qapp):
 
 # ── the resize itself ─────────────────────────────────────────
 
-def exporter_for(seq_w, seq_h, colour=(200, 40, 40)):
+def exporter_for(seq_w, seq_h, color=(200, 40, 40)):
     """An ExportThread stub whose compositor yields one flat frame."""
     thread = ExportThread.__new__(ExportThread)
     frame = torch.zeros(seq_h, seq_w, 3, dtype=torch.uint8)
-    for channel, value in enumerate(colour):
+    for channel, value in enumerate(color):
         frame[:, :, channel] = value
 
     class FakeCompositor:
@@ -153,7 +153,7 @@ def test_a_portrait_sequence_is_pillarboxed_not_squashed():
     row = out[540]                                   # across the middle
     lit = (row.sum(dim=1) > 0).nonzero().flatten()
     width = int(lit[-1] - lit[0] + 1)
-    # 1080x1920 fitted into 1080 tall is 607 wide, centred
+    # 1080x1920 fitted into 1080 tall is 607 wide, centered
     assert width == pytest.approx(607, abs=2)
     assert int(lit[0]) == pytest.approx((1920 - 607) // 2, abs=2)
     assert int(out[540, 10].sum()) == 0              # left bar is black

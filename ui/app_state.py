@@ -147,10 +147,17 @@ class AppState(QObject):
         How far the timeline scrolls: the content plus empty room past
         it, never less than the default span. This is what the zoom
         bar's full width stands for.
+
+        The room past the last clip is a share of the visible span,
+        not a fixed number of frames. A fixed 900 frames is half a
+        screen when zoomed in and nine pixels on an hour-long project
+        zoomed out, which left nowhere to drop a new clip on a full
+        timeline.
         """
         from ui.constants import (DEFAULT_VISIBLE_FRAMES,
-                                   SCROLL_PAD_FRAMES)
-        return float(max(self._total_frames + SCROLL_PAD_FRAMES,
+                                   SCROLL_PAD_FRACTION)
+        pad = SCROLL_PAD_FRACTION * self.visible_frames
+        return float(max(self._total_frames + pad,
                          DEFAULT_VISIBLE_FRAMES))
 
     @property

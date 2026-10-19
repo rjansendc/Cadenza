@@ -462,7 +462,7 @@ class Compositor:
                     cx + w / 2.0 >= self.width - 0.5 and
                     cy + h / 2.0 >= self.height - 0.5)
         except Exception:
-            return False      # never let an optimisation break a frame
+            return False      # never let an optimization break a frame
 
     def _apply_motion(self,
                        frame: torch.Tensor,
@@ -551,8 +551,8 @@ class Compositor:
             y1 = max(0, min(y1, h_src - 1))
             y2 = max(y1 + 1, min(y2, h_src))
 
-            # how far the kept region's centre sits from the source
-            # centre, in source pixels - used to hold it in place
+            # how far the kept region's center sits from the source
+            # center, in source pixels - used to hold it in place
             crop_off_x = (x1 + x2) / 2.0 - w_src / 2.0
             crop_off_y = (y1 + y2) / 2.0 - h_src / 2.0
 
@@ -659,7 +659,7 @@ class Compositor:
 
         anchor_x = motion.get('anchor_x')
         anchor_y = motion.get('anchor_y')
-        # Unset means centre. Each axis independently: fixing one of
+        # Unset means center. Each axis independently: fixing one of
         # them must never move the other, which is what special-casing
         # the 960x540 pair used to do.
         if anchor_x is None:

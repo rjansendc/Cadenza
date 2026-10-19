@@ -164,4 +164,4 @@ def test_closing_after_an_edit_now_asks(saved, monkeypatch):
     saved._on_close_project()
     QApplication.processEvents()
     assert asked, 'closing went ahead without asking'
-    assert saved.project.clips, 'the cancelled close still cleared it'
+    assert saved.project.clips, 'the canceled close still cleared it'

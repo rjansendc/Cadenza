@@ -50,10 +50,10 @@ def tensor_to_av_frame_fast(tensor: torch.Tensor,
     b = rgb[:, :, 2]
 
     # The matrix has to match the one the decoder and the player use,
-    # or saturated colour shifts: this encoded BT.601 unconditionally
+    # or saturated color shifts: this encoded BT.601 unconditionally
     # while gpu/yuv.py decodes HD as BT.709 and players assume the
     # same. Measured on test patches, that cost a mean of 6.9 levels
-    # and up to 24 on a saturated green — greys were untouched, which
+    # and up to 24 on a saturated green — grays were untouched, which
     # is why it was easy to miss.
     kr, kg, kb = matrix_for(int(rgb.shape[0]))
     yf = kr * r + kg * g + kb * b

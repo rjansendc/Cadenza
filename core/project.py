@@ -204,6 +204,109 @@ class Project:
         self.is_dirty = True
         return clip
 
+    def audio_track_is_busy(self,
+                            track: int,
+                            start_frame: int,
+                            end_frame: int) -> bool:
+        """
+        Is anything already on this audio track between these frames?
+
+        Half-open: a clip ending exactly where the next starts is not
+        a collision.
+        """
+        return bool(self.clips_overlapping(
+            track, start_frame, end_frame, is_audio=True))
+
+    def grow_tracks(self, seq, is_audio: bool, index: int) -> int:
+        """
+        Extend the sequence until `index` exists. Returns how many
+        tracks were added.
+        """
+        if seq is None:
+            return 0
+        from core.track import Track, TrackType
+        tracks = seq.audio_tracks if is_audio else seq.video_tracks
+        kind   = TrackType.AUDIO if is_audio else TrackType.VIDEO
+        added = 0
+        while len(tracks) <= index:
+            tracks.append(Track(kind, len(tracks)))
+            added += 1
+        return added
+
+    def _grow_audio_tracks(self, seq, track: int) -> None:
+        self.grow_tracks(seq, True, track)
+
+    def nearest_free_track(self,
+                           preferred: int,
+                           start_frame: int,
+                           end_frame: int,
+                           is_audio: bool,
+                           exclude_ids=(),
+                           seq=None):
+        """
+        The track closest to `preferred` with room between these
+        frames, or None if every track of that kind is busy there.
+
+        Used when a clip is dropped or dragged onto occupied
+        timeline: it moves to where there is room rather than landing
+        on top. Two clips must never hold the same frames on one
+        track — overlapping them is only recoverable by undo, and
+        nothing on screen says which one is being heard or seen.
+
+        Ties go to the higher-numbered track, so a clip slides away
+        from V1/A1 rather than toward it, matching the direction new
+        tracks are added in.
+        """
+        seq = seq if seq is not None else self.active_sequence
+        if seq is None:
+            return preferred
+        tracks = seq.audio_tracks if is_audio else seq.video_tracks
+        count  = len(tracks)
+        if count == 0:
+            return preferred
+
+        preferred = max(0, min(preferred, count - 1))
+        for distance in range(count):
+            for candidate in (preferred + distance, preferred - distance):
+                if 0 <= candidate < count and not self.clips_overlapping(
+                        candidate, start_frame, end_frame,
+                        is_audio, exclude_ids):
+                    return candidate
+                if distance == 0:
+                    break
+        return None
+
+    def first_free_track(self,
+                         first: int,
+                         start_frame: int,
+                         end_frame: int,
+                         is_audio: bool,
+                         seq=None) -> int:
+        """
+        Lowest track from `first` down with room between these
+        frames, adding tracks to the sequence if they are all busy.
+
+        Newly imported media has to go somewhere — six camera angles
+        stacked at the same timecode need six video tracks, and a
+        four-stream recording needs four audio tracks — so this grows
+        the sequence rather than refusing. Moving a clip that already
+        has a home does not: see nearest_free_track.
+        """
+        track = max(0, first)
+        while self.clips_overlapping(track, start_frame, end_frame,
+                                     is_audio):
+            track += 1
+        self.grow_tracks(seq, is_audio, track)
+        return track
+
+    def _first_free_audio_track(self,
+                                first: int,
+                                start_frame: int,
+                                end_frame: int,
+                                seq=None) -> int:
+        return self.first_free_track(first, start_frame, end_frame,
+                                     True, seq)
+
     def add_linked_clips(self,
                           media_item: MediaPoolItem,
                           drop_row: int,
@@ -253,11 +356,18 @@ class Project:
         group_id = str(uuid.uuid4())
         created  = []
 
-        # video clip
+        span = max(1, media_item.source_frames or 1)
+
+        # video clip. Like a dragged clip, it goes to the nearest
+        # video track with room rather than on top of what is there.
         if stream_info.get('video_count', 0) > 0:
+            video_track = self.first_free_track(
+                min(slot, n_video - 1),
+                start_frame, start_frame + span,
+                is_audio=False, seq=seq)
             video_clip = self.add_clip(
                 media_item,
-                track=min(slot, n_video - 1),
+                track=video_track,
                 start_frame=start_frame,
                 has_video=True,
                 has_audio=False,
@@ -268,12 +378,27 @@ class Project:
             created.append(video_clip)
 
         # audio clips — one per stream
+        #
+        # The drop row is where the search starts, not where the clip
+        # must go: each stream takes the first track from there with
+        # room over the clip's own span. Dropping a camera angle on
+        # V1 used to put its audio straight onto A1 whatever was
+        # already there, leaving two clips on one track across the
+        # same frames — recoverable only by undo, with nothing on
+        # screen to say which one was being heard.
+        #
+        # Running out of tracks used to `break`, discarding the
+        # remaining streams with nothing said — a four-stream
+        # recording lost its fourth. The sequence grows instead,
+        # because every stream of a take needs a home.
         audio_count = stream_info.get('audio_count', 0)
+        search_from = slot
+
         for i in range(audio_count):
-            audio_track = slot + i
-            # clamp to available audio tracks
-            if audio_track >= n_audio:
-                break
+            audio_track = self._first_free_audio_track(
+                search_from, start_frame, start_frame + span, seq)
+            search_from = audio_track + 1
+
             audio_clip = self.add_clip(
                 media_item,
                 track=audio_track,
@@ -375,6 +500,30 @@ class Project:
                 f"{len(self.clips)} clips | "
                 f"{len(self.sequences)} sequences)")
     
+    def clips_overlapping(self,
+                          track: int,
+                          start_frame: int,
+                          end_frame: int,
+                          is_audio: bool,
+                          exclude_ids=()) -> list:
+        """
+        Clips of the same kind on `track` meeting [start, end).
+
+        Half-open, so a clip ending exactly where the span starts is
+        left alone. Video and audio track indices are both 0-based,
+        so the kind has to be compared as well as the index.
+        """
+        found = []
+        for c in self.clips.values():
+            if c.id in exclude_ids:
+                continue
+            if c.track != track or bool(c.has_audio) != bool(is_audio):
+                continue
+            c_end = c.start_frame + c.duration
+            if c.start_frame < end_frame and start_frame < c_end:
+                found.append(c)
+        return found
+
     def split_clip(self,
                    clip_id: str,
                    frame: int) -> list:

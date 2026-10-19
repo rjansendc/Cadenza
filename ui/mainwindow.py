@@ -235,7 +235,14 @@ class MainWindow(QMainWindow):
             }
         )
 
-        # create all linked clips
+        # create all linked clips. A file with more audio streams
+        # than the sequence has tracks grows it, and a new track is a
+        # new row, so the timeline has to be rebuilt rather than just
+        # handed the clips.
+        seq = self.project.active_sequence
+        tracks_before = ((len(seq.video_tracks), len(seq.audio_tracks))
+                         if seq else (0, 0))
+
         clips = self.project.add_linked_clips(
             item,
             drop_row=raw_row,
@@ -246,6 +253,11 @@ class MainWindow(QMainWindow):
         if not clips:
             return
 
+        tracks_added = 0
+        if seq:
+            tracks_added = ((len(seq.video_tracks) - tracks_before[0]) +
+                            (len(seq.audio_tracks) - tracks_before[1]))
+
         # update total frames
         max_end = max(
             c.start_frame + c.duration
@@ -255,18 +267,23 @@ class MainWindow(QMainWindow):
             self.app_state.total_frames = max_end
 
         # add visuals to timeline
-        for clip in clips:
-            self.timeline.add_clip(clip)
+        if tracks_added:
+            self.timeline.refresh()      # rebuilds rows, reloads clips
+        else:
+            for clip in clips:
+                self.timeline.add_clip(clip)
 
         self._update_title()
 
         # status message
         v_count = stream_info.get('video_count', 0)
         a_count = stream_info.get('audio_count', 0)
-        self.status_label.setText(
-            f'Added: {item.name} → '
-            f'{v_count}V + {a_count}A clips linked'
-        )
+        message = (f'Added: {item.name} → '
+                   f'{v_count}V + {a_count}A clips linked')
+        if tracks_added:
+            message += (f' (+{tracks_added} track'
+                        f'{"s" if tracks_added > 1 else ""})')
+        self.status_label.setText(message)
 
         # sync to playback engine
         self._update_playback_clips()
@@ -780,7 +797,7 @@ class MainWindow(QMainWindow):
             CommandContext.CLIP, 'Delete'
         )
         register_command(
-            'scale_to_frame', 'Scale to Frame Size',
+            'scale_to_frame', 'Set to Frame Size',
             self._on_scale_to_frame,
             CommandContext.CLIP,
             separator_before=True
@@ -940,7 +957,7 @@ class MainWindow(QMainWindow):
             return False
         if answer == QMessageBox.StandardButton.Save:
             self._on_save()
-            return not self.project.is_dirty    # save may be cancelled
+            return not self.project.is_dirty    # save may be canceled
         return True
 
     def _on_close_project(self):
@@ -1466,16 +1483,16 @@ class MainWindow(QMainWindow):
         keyboard zoom pulled towards a point well right of the
         playhead.
         """
-        centre = (self.app_state.view_start +
+        center = (self.app_state.view_start +
                   self.app_state.view_end) / 2
         if self.app_state.total_frames <= 0:
-            return centre
+            return center
         ph_norm = self.app_state.frame_to_norm(
             self.app_state.playhead_frame)
         if (self.app_state.view_start <= ph_norm
                 <= self.app_state.view_end):
             return ph_norm
-        return centre
+        return center
 
     def _on_zoom_in(self):
         self.app_state.zoom_in_at_position(
@@ -1574,20 +1591,54 @@ class MainWindow(QMainWindow):
         )
 
     def _on_scale_to_frame(self):
+        clips = [self.project.clips.get(cid)
+                 for cid in self.app_state.selected_clip_ids]
+        self.scale_clips_to_frame([c for c in clips if c])
+
+    def scale_clips_to_frame(self, clips):
+        """
+        Fit clips to the sequence frame.
+
+        Both the Clip menu and the clip's own right-click menu come
+        through here. The right-click one used to fit the clip without
+        telling the Effects panel, so the Scale box kept the old
+        number — and the next nudge of its arrows wrote that stale
+        value back, throwing the clip to whatever it had been before.
+        """
+        from core.undo import (undo_stack, CompoundCommand,
+                               ScaleToFrameCommand)
         seq = self.project.active_sequence
-        if not seq:
+        if not seq or not clips:
             return
-        for clip_id in self.app_state.selected_clip_ids:
-            clip = self.project.clips.get(clip_id)
-            if clip:
-                clip.scale_to_frame(
-                    seq.settings.width,
-                    seq.settings.height
-                )
-        self.app_state.clip_modified.emit(
-            self.app_state.selected_clip_ids[0]
-            if self.app_state.selected_clip_ids else ''
-        )
+
+        commands = []
+        for clip in clips:
+            before = ScaleToFrameCommand.snapshot(clip)
+            clip.scale_to_frame(seq.settings.width,
+                                seq.settings.height)
+            after = ScaleToFrameCommand.snapshot(clip)
+            if before != after:
+                commands.append(
+                    ScaleToFrameCommand(clip, before, after))
+
+        if len(commands) == 1:
+            undo_stack.push(commands[0], execute=False)
+        elif commands:
+            group = CompoundCommand('Set to Frame Size')
+            for command in commands:
+                group.add(command)
+            undo_stack.push(group, execute=False)
+
+        # tell the Effects panel, or it keeps showing the old scale
+        for clip in clips:
+            self.app_state.clip_modified.emit(clip.id)
+
+        if self._playback and self._playback._compositor:
+            self._playback._compositor.invalidate_cache()
+        self._scrub_to_playhead()
+        self.status_label.setText(
+            'Set to frame size' if len(clips) == 1
+            else f'Set {len(clips)} clips to frame size')
 
     # =========================================================
     # Playback Actions (stubs — wired later)
@@ -1717,6 +1768,11 @@ class MainWindow(QMainWindow):
         if worker is not None:
             worker.stop()
             self._scrub_worker = None
+        # waveforms still decoding are abandoned rather than waited
+        # out: an undestroyed QThread warns on the way down, and on
+        # Windows can take the exit with it
+        from media.waveform_worker import waveform_queue
+        waveform_queue.shutdown()
         event.accept()
 
     # playback functions
@@ -1890,7 +1946,7 @@ class MainWindow(QMainWindow):
                 self.preview.display_frame
             )
             self._update_playback_clips()
-            # honour whatever quality the preview panel is set to
+            # honor whatever quality the preview panel is set to
             # (it defaults to 1/2) now that a compositor exists
             if self._playback._compositor and hasattr(
                     self.preview, 'preview_size'):

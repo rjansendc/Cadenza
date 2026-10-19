@@ -183,14 +183,14 @@ def anchor_offset(orig_w, anchor_x, user_scale, geom_scale=1.0,
     return (orig_w / 2.0 - anchor_x) * (scale_w / src_scale)
 
 
-def test_centre_anchor_does_not_move_the_picture():
+def test_center_anchor_does_not_move_the_picture():
     assert anchor_offset(1920, 960, 1.0) == 0.0
     assert anchor_offset(3840, 1920, 0.5) == 0.0
 
 
 def test_anchor_left_edge_pushes_the_picture_right():
     # anchoring the left edge at Position puts the whole image to its
-    # right, so the centre moves right by half the scaled width
+    # right, so the center moves right by half the scaled width
     assert anchor_offset(1920, 0, 1.0) == 960.0
     assert anchor_offset(1920, 0, 0.5) == 480.0
 
@@ -208,15 +208,15 @@ def test_anchor_follows_preview_quality():
     assert abs(half * 2 - full) < 1e-9
 
 
-def test_motion_centres_the_anchor_for_its_source():
+def test_motion_centers_the_anchor_for_its_source():
     from core.effects import EffectRegistry
     motion = EffectRegistry.get('motion')()
-    motion.centre_anchor(3840, 2160)
+    motion.center_anchor(3840, 2160)
     assert motion.get('anchor_x') == 1920.0
     assert motion.get('anchor_y') == 1080.0
 
 
-def test_scale_to_frame_also_centres_the_anchor():
+def test_scale_to_frame_also_centers_the_anchor():
     from core.clip import Clip, ClipType
     clip = Clip(filepath='x.mp4', clip_type=ClipType.VIDEO,
                 source_width=3840, source_height=2160)

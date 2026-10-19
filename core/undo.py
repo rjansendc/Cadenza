@@ -336,6 +336,45 @@ class TrimClipCommand(UndoCommand):
         self.clip.start_frame = self.old_start
 
 
+class ScaleToFrameCommand(UndoCommand):
+    """
+    Fit a clip to the sequence frame, and put it back.
+
+    Set to Frame Size rewrites several motion parameters at once —
+    scale, position and anchor — so undo restores them together.
+    It was not undoable at all before, from either menu.
+    """
+
+    PARAMS = ('scale', 'scale_x', 'position_x', 'position_y',
+              'anchor_x', 'anchor_y')
+
+    @classmethod
+    def snapshot(cls, clip) -> dict:
+        motion = clip.get_effect('motion')
+        if motion is None:
+            return {}
+        return {name: motion.get(name) for name in cls.PARAMS}
+
+    def __init__(self, clip, before: dict, after: dict):
+        super().__init__('Set to Frame Size')
+        self.clip   = clip
+        self.before = dict(before)
+        self.after  = dict(after)
+
+    def _apply(self, values: dict):
+        motion = self.clip.get_effect('motion')
+        if motion is None:
+            return
+        for name, value in values.items():
+            motion.set(name, value)
+
+    def redo(self):
+        self._apply(self.after)
+
+    def undo(self):
+        self._apply(self.before)
+
+
 class AddClipCommand(UndoCommand):
     def __init__(self, project, clip, timeline_add_fn,
                  timeline_remove_fn):

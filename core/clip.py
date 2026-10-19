@@ -397,10 +397,10 @@ class Clip:
 
     def migrate_anchor(self):
         """
-        Give the anchor the source's real centre when it still holds
+        Give the anchor the source's real center when it still holds
         the old 960x540 default.
 
-        That default is only the centre of a 1080p source, so on a 4K
+        That default is only the center of a 1080p source, so on a 4K
         clip it sat a quarter of the way in. Projects saved before the
         anchor was implemented all carry it.
         """
@@ -410,8 +410,8 @@ class Clip:
         if (motion.get('anchor_x'), motion.get('anchor_y')) != (960.0, 540.0):
             return                      # deliberately set: leave alone
         if (self.source_width, self.source_height) == (1920, 1080):
-            return                      # already the centre
-        motion.centre_anchor(self.source_width, self.source_height)
+            return                      # already the center
+        motion.center_anchor(self.source_width, self.source_height)
 
     def scale_to_frame(self, canvas_w: int,
                         canvas_h: int):

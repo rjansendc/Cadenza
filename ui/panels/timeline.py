@@ -441,7 +441,7 @@ class TimelinePanel(QWidget):
         self._sync_ruler_width()
 
     def _on_clip_modified(self, clip_id: str = None):
-        """Repaint one clip — keyframe markers, envelope, colours."""
+        """Repaint one clip — keyframe markers, envelope, colors."""
         for row in self._rows.values():
             item = row.canvas._clip_items.get(clip_id)
             if item is not None:

@@ -15,12 +15,18 @@ NUM_AUDIO_TRACKS   = 3     # default — can grow dynamically
 # the ruler. A fresh sequence shows DEFAULT_VISIBLE_FRAMES of time,
 # which puts a 10 second still at about a twentieth of the width.
 #
-# The scale used to be a normalised fraction of the project length, so
+# The scale used to be a normalized fraction of the project length, so
 # every edit that changed that length silently rescaled the whole
 # timeline: six identical stills ended up drawn at six different
 # widths, and stretching one moved all the others.
 DEFAULT_VISIBLE_FRAMES = 5400   # ~3 minutes at 30fps
-SCROLL_PAD_FRAMES      = 900    # ~30s of empty room past the last clip
+# Empty room past the last clip, so there is always somewhere to drop
+# a new clip on a full timeline. A share of the visible span rather
+# than a frame count: a fixed 900 frames was half a screen zoomed in
+# and, on an hour-long project zoomed to fit, under 1% of the ruler —
+# about nine pixels, with nowhere to aim. A short project still gets
+# DEFAULT_VISIBLE_FRAMES of ruler, which is its own floor.
+SCROLL_PAD_FRACTION    = 0.25   # a quarter of the visible span
 MIN_VISIBLE_FRAMES     = 12     # how far in the zoom may go
 
 # Frame sizes offered in the sequence and export dialogs. One list,

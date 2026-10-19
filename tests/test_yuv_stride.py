@@ -91,7 +91,7 @@ def test_odd_dimensions_do_not_raise():
 
 
 def test_every_plane_is_filled():
-    """A short write leaves green or grey edges rather than failing."""
+    """A short write leaves green or gray edges rather than failing."""
     w, h = 1080, 1920
     frame = tensor_to_av_frame_fast(gradient(w, h))
     for plane in frame.planes:
