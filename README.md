@@ -2,6 +2,8 @@
 
 A GPU-accelerated video editor built in Python with PySide6 and PyTorch. Designed for multi-camera concert editing with audio sync, Lumetri color, and NVIDIA NVENC export.
 
+See the [changelog](CHANGELOG.md) for changes between releases.
+
 ## Features
 
 - **Multi-track timeline** — video and audio tracks with drag, trim, razor cut
