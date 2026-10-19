@@ -8,7 +8,7 @@ if torch.cuda.is_available():
 import PySide6
 print(f"\nPySide6 version: {PySide6.__version__}")
 
-import decord
-print(f"decord version: {decord.__version__}")
+import av
+print(f"PyAV version: {av.__version__}")
 
 print("\nAll good — stack is live.")

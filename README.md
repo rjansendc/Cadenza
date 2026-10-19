@@ -17,7 +17,7 @@ A GPU-accelerated video editor built in Python with PySide6 and PyTorch. Designe
 
 - Python 3.11+
 - NVIDIA GPU (recommended for export and compositing)
-- Windows (tested on Windows 11)
+- Windows 11 or Linux (tested on Ubuntu 22.04 x86_64)
 
 ## Installation
 
@@ -32,6 +32,53 @@ pip install PySide6 torch torchvision av numpy scipy
 ```bash
 python main.py
 ```
+
+## Linux release
+
+The application version comes from `core/version.py`. The Linux build uses
+the current Git checkout, leaving the committed Windows spec unchanged.
+
+Extract `Cadenza-<version>-linux-x86_64-<commit>.tar.gz`, open its `Cadenza` directory,
+and run `./Cadenza`. Keep `_internal` beside the executable. Python,
+Conda, Qt, FFmpeg, PortAudio, and CUDA runtime libraries are bundled.
+The host provides the desktop session and graphics/audio drivers.
+
+The release is built on Ubuntu 22.04 x86_64. NVIDIA acceleration needs a
+driver compatible with CUDA 12.1; Cadenza also supports CPU rendering and
+software H.264 export.
+
+### Building on Linux
+
+Install Conda and make it available on `PATH`, then run:
+
+```bash
+bash tools/setup_linux.sh
+bash tools/build_linux.sh
+```
+
+Setup uses `.env/` and keeps downloads in `.local-cache/`. The build runs
+the tests, uses `Cadenza-linux.spec`, checks the frozen executable without
+the development environment, and produces a portable directory, `.tar.gz`,
+and SHA-256 checksum in `dist/linux/`. `Cadenza.spec` remains the Windows recipe.
+
+For source development:
+
+```bash
+bash tools/run_linux.sh
+# Or activate Python, FFmpeg, and the desktop audio settings:
+source tools/activate_linux.sh
+QT_QPA_PLATFORM=offscreen python -m pytest -q
+```
+
+For diagnostics of the finished bundle:
+
+```bash
+./Cadenza --smoke-test
+CUDA_VISIBLE_DEVICES=-1 ./Cadenza --smoke-test
+```
+
+These exercise the GUI, six stills, zoom stability, project IO, preview,
+audio, bundled FFmpeg, software/GPU export, and Close Project. No sample footage is needed.
 
 ## Stack
 

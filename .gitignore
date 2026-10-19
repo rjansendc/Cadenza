@@ -1,4 +1,6 @@
 # IDE
+.env
+.local-cache/
 .vscode/
 .idea/
 

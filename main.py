@@ -5,6 +5,9 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
 def main():
+    if '--smoke-test' in sys.argv:
+        from tools.bundle_check import run
+        sys.exit(run())
     # Prepare the caches and say where they are. This used to be
     # Path('cache/waveforms'), which is relative to whatever directory
     # the app happened to be launched from — so it scattered empty
