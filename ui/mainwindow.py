@@ -78,6 +78,9 @@ class MainWindow(QMainWindow):
         # Load effects for Effects Panel
         self._ensure_effects_loaded()
 
+        # notice edits, so unsaved work cannot be closed silently
+        self._watch_for_edits()
+
     def _ensure_effects_loaded(self):
         """Import effects modules to trigger registration."""
         try:
@@ -285,6 +288,8 @@ class MainWindow(QMainWindow):
                          self._on_open_project, 'Ctrl+O')
         self._recent_menu = file_menu.addMenu('Open Recent')
         self._rebuild_recent_menu()
+        self._add_action(file_menu, 'Close Project',
+                         self._on_close_project, 'Ctrl+W')
         file_menu.addSeparator()
         self._add_action(file_menu, 'Save',
                          self._on_save,          'Ctrl+S')
@@ -876,8 +881,88 @@ class MainWindow(QMainWindow):
             # the monitor has to be told the new frame size, or it
             # keeps composing at whatever the last sequence was
             self._rebuild_compositor(seq)
-            self._update_title()
+            self.mark_saved()
             self.status_label.setText('New project created')
+
+    # ── unsaved work ─────────────────────────────────────────
+    # is_dirty was only ever set by structural changes in
+    # core/project.py — importing media, adding or removing a clip.
+    # Trimming, grading, dragging opacity, muting a track: none of
+    # them touched it, so the title never showed the dot and closing
+    # went ahead without asking. Every undoable edit goes through the
+    # one stack, so that is where to listen.
+
+    def _watch_for_edits(self):
+        from core.undo import undo_stack
+        self._saved_at = undo_stack.position
+        self._watching = True
+        undo_stack.changed.connect(self._on_stack_changed)
+
+    def _on_stack_changed(self):
+        from core.undo import undo_stack
+        dirty = undo_stack.position != getattr(self, '_saved_at', -1)
+        if dirty != self.project.is_dirty:
+            self.project.is_dirty = dirty
+            self._update_title()
+
+    def mark_saved(self):
+        """Remember this as the clean point."""
+        from core.undo import undo_stack
+        self._saved_at = undo_stack.position
+        self.project.is_dirty = False
+        self._update_title()
+
+    def mark_edited(self):
+        """For changes that do not go on the undo stack."""
+        if not self.project.is_dirty:
+            self.project.is_dirty = True
+            self._update_title()
+
+    def _confirm_discard(self, action: str) -> bool:
+        """
+        Ask before throwing unsaved work away.
+
+        Exit carried a "TODO: ask to save" and simply dropped it.
+        Returns True when it is safe to go ahead.
+        """
+        if not self.project.is_dirty:
+            return True
+        from PySide6.QtWidgets import QMessageBox
+        answer = QMessageBox.question(
+            self, 'Unsaved changes',
+            f'{self.project.name} has unsaved changes.\n\n'
+            f'Save before {action}?',
+            QMessageBox.StandardButton.Save |
+            QMessageBox.StandardButton.Discard |
+            QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save)
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.Save:
+            self._on_save()
+            return not self.project.is_dirty    # save may be cancelled
+        return True
+
+    def _on_close_project(self):
+        """
+        Close the open project and start an empty one.
+
+        There was no way to close a project at all — only to replace
+        it by opening or creating another.
+        """
+        if not self._confirm_discard('closing'):
+            return
+        self.project = Project()
+        self.app_state.deselect_all()
+        self.app_state.total_frames = 0
+        self.timeline.project = self.project
+        self.media_bin.project = self.project
+        self.media_bin.clear()
+        self.timeline.refresh()
+        self._rebuild_compositor(self.project.active_sequence)
+        self._on_zoom_fit()
+        self.mark_saved()
+        self.status_label.setText('Project closed')
 
     def _on_open_project(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -913,6 +998,7 @@ class MainWindow(QMainWindow):
             # the monitor were both left on the previous sequence's,
             # so opening a portrait project drew it as landscape.
             self._rebuild_compositor(project.active_sequence)
+            self.mark_saved()      # a freshly opened project is clean
             self._rebuild_recent_menu()
             self.status_label.setText(
                 f'Opened: {path}'
@@ -988,7 +1074,7 @@ class MainWindow(QMainWindow):
             recent.add_recent(fp)
             self._rebuild_recent_menu()
             if save_project(self.project, fp):
-                self._update_title()
+                self.mark_saved()
                 self.status_label.setText(
                     'Project saved'
                 )
@@ -1007,6 +1093,7 @@ class MainWindow(QMainWindow):
             recent.add_recent(path)
             self._rebuild_recent_menu()
             if save_project(self.project, path):
+                self.mark_saved()
                 self._update_title()
                 self.status_label.setText(
                     f'Saved: {path}'
@@ -1273,6 +1360,7 @@ class MainWindow(QMainWindow):
         from core.track import Track, TrackType
         idx = len(seq.video_tracks)
         seq.video_tracks.append(Track(TrackType.VIDEO, idx))
+        self.mark_edited()
         self.timeline.refresh()
         self.status_label.setText(f'Added V{idx+1}')
 
@@ -1283,6 +1371,7 @@ class MainWindow(QMainWindow):
         from core.track import Track, TrackType
         idx = len(seq.audio_tracks)
         seq.audio_tracks.append(Track(TrackType.AUDIO, idx))
+        self.mark_edited()
         self.timeline.refresh()
         self.status_label.setText(f'Added A{idx+1}')
 
@@ -1300,6 +1389,7 @@ class MainWindow(QMainWindow):
         dlg = SequenceSettingsDialog(seq.settings, parent=self)
         if dlg.exec():
             seq.settings = dlg.get_settings()
+            self.mark_edited()
             self._rebuild_compositor(seq)
             self.timeline.refresh()
             self.status_label.setText('Sequence settings updated')
@@ -1610,9 +1700,19 @@ class MainWindow(QMainWindow):
         return box
 
     def closeEvent(self, event):
-        if self.project.is_dirty:
-            # TODO: ask to save
-            pass
+        if not self._confirm_discard('quitting'):
+            event.ignore()
+            return
+        # let go of the shared undo stack: it outlives the window.
+        # Guarded by a flag rather than by catching — disconnecting a
+        # second time only warns, it does not raise.
+        if getattr(self, '_watching', False):
+            self._watching = False
+            from core.undo import undo_stack
+            try:
+                undo_stack.changed.disconnect(self._on_stack_changed)
+            except (RuntimeError, TypeError):
+                pass
         worker = getattr(self, '_scrub_worker', None)
         if worker is not None:
             worker.stop()

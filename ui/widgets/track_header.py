@@ -161,6 +161,7 @@ class TrackHeader(QWidget):
     def _on_lock(self, c):
         self.track.locked = c
         self.lock_toggled.emit(self.track.id, c)
+        self._request_repaint()
 
     def _on_solo(self, c):
         self.track.solo = c
@@ -200,6 +201,10 @@ class TrackHeader(QWidget):
     def _request_repaint(self):
         """Invalidate cache and rescrub current frame."""
         w = self.window()
+        # muting or hiding a track is a change worth saving, and it
+        # never goes near the undo stack
+        if hasattr(w, 'mark_edited'):
+            w.mark_edited()
         # invalidate compositor cache first
         if (hasattr(w, '_playback') and
                 w._playback and

@@ -155,6 +155,17 @@ class UndoStack(QObject):
     # ── state queries ────────────────────────────────────────
 
     @property
+    def position(self) -> int:
+        """
+        How far through the stack we are.
+
+        Compare it against the position at the last save to know
+        whether there is anything to lose — including the case where
+        the user has undone their way back to the saved state.
+        """
+        return self._index
+
+    @property
     def can_undo(self) -> bool:
         return self._index >= 0
 
