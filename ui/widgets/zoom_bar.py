@@ -188,10 +188,13 @@ class ZoomBar(QWidget):
         """
         Scroll wheel zooms in/out at cursor position.
         """
-        x        = event.position().x()
-        norm_pos = self.app_state.pixel_to_norm(
-            x, self.width()
-        )
+        x = event.position().x()
+        # The bar spans the whole scroll range, so x/width IS the
+        # normalized position. Running it through pixel_to_norm —
+        # which maps the timeline's own pixels — anchored the zoom
+        # somewhere else entirely.
+        w = float(self.width()) or 1.0
+        norm_pos = max(0.0, min(x / w, 1.0))
         delta = event.angleDelta().y()
         if delta > 0:
             self.app_state.zoom_in_at_position(norm_pos)

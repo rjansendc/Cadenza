@@ -16,6 +16,7 @@ from PySide6.QtGui import (
 from core.project import Project, MediaPoolItem
 from core.commands import registry, CommandContext
 from ui.app_state import AppState
+from ui import recent_files as recent
 from ui.constants import (
     snap_row_for_clip, row_to_track_index
 )
@@ -282,6 +283,8 @@ class MainWindow(QMainWindow):
                          self._on_new_project,  'Ctrl+N')
         self._add_action(file_menu, 'Open Project...',
                          self._on_open_project, 'Ctrl+O')
+        self._recent_menu = file_menu.addMenu('Open Recent')
+        self._rebuild_recent_menu()
         file_menu.addSeparator()
         self._add_action(file_menu, 'Save',
                          self._on_save,          'Ctrl+S')
@@ -318,7 +321,7 @@ class MainWindow(QMainWindow):
         # Sequence
         seq_menu = mb.addMenu('Sequence')
         self._add_action(seq_menu, 'Sequence Settings...',
-                         self._on_new_sequence)
+                         self._on_sequence_settings)
         seq_menu.addSeparator()
         self._add_action(seq_menu, 'Add Video Track',
                          self._on_add_video_track)
@@ -349,6 +352,40 @@ class MainWindow(QMainWindow):
                          self._on_about)
 
 
+
+    def _rebuild_recent_menu(self):
+        """
+        List the projects opened or saved lately, newest first.
+
+        Rebuilt rather than appended to, so a project that has been
+        moved or deleted quietly drops off the list.
+        """
+        menu = getattr(self, '_recent_menu', None)
+        if menu is None:
+            return
+        menu.clear()
+        paths = recent.recent_projects()
+        if not paths:
+            empty = menu.addAction('No recent projects')
+            empty.setEnabled(False)
+            return
+        import os
+        for i, path in enumerate(paths, start=1):
+            name = os.path.basename(path)
+            action = QAction(f'&{i}  {name}', self)
+            action.setStatusTip(path)
+            action.setToolTip(path)
+            action.triggered.connect(
+                lambda _checked=False, p=path: self.open_project_path(p))
+            menu.addAction(action)
+        menu.addSeparator()
+        clear = menu.addAction('Clear Recent')
+        clear.triggered.connect(self._on_clear_recent)
+
+    def _on_clear_recent(self):
+        recent.clear_recent()
+        self._rebuild_recent_menu()
+        self.status_label.setText('Recent projects cleared')
 
     def _add_action(self, menu: QMenu, label: str,
                     slot, shortcut: str = None) -> QAction:
@@ -676,12 +713,15 @@ class MainWindow(QMainWindow):
             return
 
         suggested = (seq.name or 'sequence') + '.xml'
+        import os as _os
+        suggested = _os.path.join(recent.last_dir(recent.XML), suggested)
         path, _ = QFileDialog.getSaveFileName(
             self, 'Export Premiere/FCP XML', suggested,
             'FCP XML (*.xml)')
         if not path:
             return
 
+        recent.remember_dir(recent.XML, path)
         try:
             from core.fcpxml_export import export_fcpxml
             report = export_fcpxml(self.project, path, seq)
@@ -824,25 +864,37 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             settings = dlg.get_settings()
             self.project = Project()
-            seq = self.project.add_sequence(settings=settings)
-            self.project.active_sequence = seq
+            # Project() already makes 'Sequence 01'. Adding another
+            # left an empty orphan behind in project.sequences, so
+            # settle the settings on the one that is there.
+            seq = self.project.active_sequence
+            seq.settings = settings
             self.app_state.deselect_all()
             self.timeline.project = self.project
             self.media_bin.project = self.project
             self.timeline.refresh()
+            # the monitor has to be told the new frame size, or it
+            # keeps composing at whatever the last sequence was
+            self._rebuild_compositor(seq)
             self._update_title()
             self.status_label.setText('New project created')
 
     def _on_open_project(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, 'Open Project', '',
+            self, 'Open Project', recent.last_dir(recent.PROJECTS),
             'Cadenza Project (*.veproj)'
         )
         if not path:
             return
+        self.open_project_path(path)
+
+    def open_project_path(self, path: str):
+        """Open a project by path — the dialog and Open Recent
+        both come through here."""
         try:
             from core.project_io import load_project
             project = load_project(path)
+            recent.add_recent(path)
             self.project  = project
             self.app_state.total_frames = (
                 project.total_frames
@@ -857,7 +909,11 @@ class MainWindow(QMainWindow):
                 self.media_bin.add_item(item)
             self._update_title()
             self._on_zoom_fit()
-            self._update_playback_clips()
+            # A project carries its own frame size. The compositor and
+            # the monitor were both left on the previous sequence's,
+            # so opening a portrait project drew it as landscape.
+            self._rebuild_compositor(project.active_sequence)
+            self._rebuild_recent_menu()
             self.status_label.setText(
                 f'Opened: {path}'
             )
@@ -866,6 +922,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self, 'Open Failed', str(e)
             )
+            self._rebuild_recent_menu()   # a missing file drops off
 
     def _on_import_fcpxml(self):
         """
@@ -875,7 +932,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QMessageBox
 
         path, _ = QFileDialog.getOpenFileName(
-            self, 'Import Premiere/FCP XML', '',
+            self, 'Import Premiere/FCP XML', recent.last_dir(recent.XML),
             'FCP XML (*.xml)'
         )
         if not path:
@@ -918,7 +975,7 @@ class MainWindow(QMainWindow):
             self.media_bin.add_item(item)
         self._update_title()
         self._on_zoom_fit()
-        self._update_playback_clips()
+        self._rebuild_compositor(project.active_sequence)
         self.status_label.setText(
             f"Imported {report.sequence_name}: "
             f"{report.video_clips + report.audio_clips} clips"
@@ -928,6 +985,8 @@ class MainWindow(QMainWindow):
         fp = getattr(self.project, 'project_path', None)
         if fp:
             from core.project_io import save_project
+            recent.add_recent(fp)
+            self._rebuild_recent_menu()
             if save_project(self.project, fp):
                 self._update_title()
                 self.status_label.setText(
@@ -938,13 +997,15 @@ class MainWindow(QMainWindow):
 
     def _on_save_as(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, 'Save Project As', '',
+            self, 'Save Project As', recent.last_dir(recent.PROJECTS),
             'Cadenza Project (*.veproj)'
         )
         if path:
             if not path.endswith('.veproj'):
                 path += '.veproj'
             from core.project_io import save_project
+            recent.add_recent(path)
+            self._rebuild_recent_menu()
             if save_project(self.project, path):
                 self._update_title()
                 self.status_label.setText(
@@ -959,16 +1020,15 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import Qt
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
+            recent.remember_dir(recent.MEDIA, paths[0])
             for path in paths:
                 item = self.project.import_media(path)
                 self._populate_media_metadata(item)
                 self.media_bin.add_item(item)
-            total = max(
-                (item.source_frames
-                 for item in self.project.media_pool.values()),
-                default=0
-            )
-            self.app_state.total_frames = total
+            # Importing puts nothing on the timeline, so it must not
+            # touch the timeline's length. This used to set it from the
+            # longest source file, which moved the scale before the
+            # first clip was even placed.
             self.timeline.refresh()
             self.status_label.setText(
                 f'Imported {len(paths)} file(s)')
@@ -977,7 +1037,7 @@ class MainWindow(QMainWindow):
 
     def _on_import_media(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, 'Import Media', '',
+            self, 'Import Media', recent.last_dir(recent.MEDIA),
             'Media Files ('
             '*.mp4 *.mov *.avi *.mkv *.mts '
             '*.m2ts *.wav *.mp3 *.aac *.flac '
@@ -998,6 +1058,7 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
+            recent.remember_dir(recent.MEDIA, paths[0])
             for path in paths:
                 item = self.project.import_media(path)
                 self.status_label.setText(
@@ -1007,15 +1068,10 @@ class MainWindow(QMainWindow):
                 self._populate_media_metadata(item)
                 self.media_bin.add_item(item)
 
-            # update total duration for zoom math
-            total = max(
-                (item.source_frames
-                 for item in
-                 self.project.media_pool.values()),
-                default=0
-            )
-            self.app_state.total_frames = total
-            self.timeline.refresh()  # refit all clips to new ruler scale
+            # Nothing has been placed yet, so the timeline's length
+            # is unchanged — and with an absolute scale there is no
+            # ruler to refit.
+            self.timeline.refresh()
             self.status_label.setText(
                 f'Imported {len(paths)} file(s)'
             )
@@ -1120,11 +1176,12 @@ class MainWindow(QMainWindow):
         Handle still image import — treat as 10-second video clip.
         """
         from PySide6.QtGui import QImageReader
+        from ui.constants import STILL_IMAGE_SECONDS
         reader = QImageReader(item.filepath)
         size   = reader.size()
         seq    = self.project.active_sequence
         fps    = seq.settings.fps if seq else 29.97
-        duration_secs = 10.0  # default 10 seconds
+        duration_secs = STILL_IMAGE_SECONDS
 
         item.has_video       = True
         item.has_audio       = False
@@ -1229,8 +1286,13 @@ class MainWindow(QMainWindow):
         self.timeline.refresh()
         self.status_label.setText(f'Added A{idx+1}')
 
-    def _on_new_sequence(self):
-        """Open sequence settings dialog for current sequence."""
+    def _on_sequence_settings(self):
+        """
+        Edit the open sequence's settings.
+
+        The old name said "new sequence", which it never did: nothing
+        in the UI creates a second one.
+        """
         from ui.panels.sequence_settings_dialog import SequenceSettingsDialog
         seq = self.project.active_sequence
         if not seq:
@@ -1238,8 +1300,41 @@ class MainWindow(QMainWindow):
         dlg = SequenceSettingsDialog(seq.settings, parent=self)
         if dlg.exec():
             seq.settings = dlg.get_settings()
+            self._rebuild_compositor(seq)
             self.timeline.refresh()
             self.status_label.setText('Sequence settings updated')
+
+    def _rebuild_compositor(self, seq):
+        """
+        Follow a change of frame size or rate.
+
+        The compositor reads the sequence once, when it is built, and
+        caches the canvas dimensions — so changing 1080p to 4K left it
+        compositing at the old size until the app was restarted.
+        """
+        playback = getattr(self, '_playback', None)
+        if playback is None:
+            return
+        playback.sequence = seq
+        previous = playback._compositor
+        if previous is not None:
+            try:
+                previous.close()
+            except Exception:
+                pass
+            playback._compositor = None      # set_clips rebuilds it
+        self._update_playback_clips()
+
+        # The monitor caches the sequence size to work out its decode
+        # size from the quality box (half of 1920 is not half of 1080),
+        # and it was only ever told once, at startup. Telling it again
+        # re-emits the preview size, which resizes the new compositor.
+        self.preview.set_sequence_size(
+            seq.settings.width, seq.settings.height)
+
+        # and nothing had asked for the picture to be drawn again, so
+        # the monitor kept showing the old frame at the old shape
+        self._scrub_to_playhead()
 
     def _on_render(self):
         self.status_label.setText('Render — coming soon')
@@ -1270,35 +1365,27 @@ class MainWindow(QMainWindow):
     # View Actions
     # =========================================================
 
-    def _on_zoom_fit(self):
-        """Zoom timeline to fit all clips with small margin."""
-        clips = list(self.project.clips.values())
-        if not clips:
-            return
-        total = self.app_state.total_frames
-        if total <= 0:
-            return
-        min_f = min(c.start_frame for c in clips)
-        max_f = max(c.start_frame + c.duration for c in clips)
-        margin = (max_f - min_f) * 0.05  # 5% margin each side
-        start_norm = max(0.0, (min_f - margin) / total)
-        end_norm   = min(1.0, (max_f + margin) / total)
-        self.app_state.set_view(start_norm, end_norm)
-
     def _zoom_anchor(self) -> float:
-        """Normalized position to zoom around — playhead if visible,
-        else center of current view."""
-        total = self.app_state.total_frames
-        if total <= 0:
-            return (self.app_state.view_start +
-                    self.app_state.view_end) / 2
-        ph_norm = self.app_state.playhead_frame / total
-        # Use playhead if it's in the visible range
+        """
+        Normalized position to zoom around — the playhead when it is
+        on screen, else the middle of the view.
+
+        This divided the playhead by total_frames while view_start and
+        view_end are fractions of the scroll range, which is the
+        content plus padding. The two disagreed, so the menu and
+        keyboard zoom pulled towards a point well right of the
+        playhead.
+        """
+        centre = (self.app_state.view_start +
+                  self.app_state.view_end) / 2
+        if self.app_state.total_frames <= 0:
+            return centre
+        ph_norm = self.app_state.frame_to_norm(
+            self.app_state.playhead_frame)
         if (self.app_state.view_start <= ph_norm
                 <= self.app_state.view_end):
             return ph_norm
-        return (self.app_state.view_start +
-                self.app_state.view_end) / 2
+        return centre
 
     def _on_zoom_in(self):
         self.app_state.zoom_in_at_position(
@@ -1309,24 +1396,20 @@ class MainWindow(QMainWindow):
             self._zoom_anchor())
 
     def _on_zoom_fit(self):
+        """
+        Fit the clips to the window — on request only.
+
+        The scale is absolute, so this is the one place that changes
+        it on the user's behalf.
+        """
         clips = list(self.project.clips.values())
-        if clips:
-            min_f = min(c.start_frame for c in clips)
-            max_f = max(c.start_frame + c.duration
-                        for c in clips)
-            # Always update total_frames to actual clip extent
-            self.app_state.total_frames = max_f
-            if max_f > 0:
-                margin = (max_f - min_f) * 0.05
-                start  = max(0.0, (min_f - margin) / max_f)
-                end    = min(1.0, (max_f + margin) / max_f)
-                # Force set_view even if values unchanged
-                # so zoom_changed fires and canvases redraw
-                self.app_state._view_start = -1  # force emit
-                self.app_state.set_view(start, end)
-                return
-        self.app_state._view_start = -1
-        self.app_state.set_view(0.0, 1.0)
+        if not clips:
+            self.app_state.set_view(0.0, 1.0)
+            return
+        min_f = min(c.start_frame for c in clips)
+        max_f = max(c.start_frame + c.duration for c in clips)
+        self.app_state.total_frames = max_f
+        self.app_state.zoom_to_fit(min_f, max_f)
 
     # =========================================================
     # Clip Actions
@@ -1386,15 +1469,13 @@ class MainWindow(QMainWindow):
                 undo_stack._compound.add(cmd)
 
         self.app_state.deselect_all()
-        # Recalculate total_frames after deletion and reset view
+        # follow the content extent; leave the zoom where the user
+        # put it — deleting used to reset it to fully zoomed out
         if self.project.clips:
-            new_total = max(
+            self.app_state.total_frames = max(
                 c.start_frame + c.duration
                 for c in self.project.clips.values()
             )
-            self.app_state.total_frames = new_total
-            # Reset view to show full extent
-            self.app_state.set_view(0.0, 1.0)
         self._update_playback_clips()
         self._update_undo_actions()
         self._update_title()
@@ -1469,9 +1550,10 @@ class MainWindow(QMainWindow):
     # =========================================================
 
     def _update_title(self):
+        from core.version import __version__
         dirty = ' •' if self.project.is_dirty else ''
         self.setWindowTitle(
-            f'Cadenza — {self.project.name}{dirty}'
+            f'Cadenza {__version__} — {self.project.name}{dirty}'
         )
 
     def _on_open_cache_folder(self):
@@ -1492,11 +1574,40 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f'Cache: {root}')
 
     def _on_about(self):
-        from core.paths import cache_root
-        self.status_label.setText(
-            f'Cadenza v1.0 — built with PySide6 + PyTorch  ·  '
-            f'cache: {cache_root()}'
-        )
+        """
+        What this build is, and what it is running on.
+
+        A proper dialog rather than a line in the status bar, and the
+        version comes from core.version instead of being a literal
+        here that said 1.0 forever.
+        """
+        self.about_box().exec()
+
+    def about_box(self):
+        """Build the About dialog. Separate so it can be inspected
+        without blocking on exec()."""
+        from PySide6.QtWidgets import QMessageBox
+        from core.version import __version__, environment, APP_NAME
+
+        rows = environment()
+        # no space padding: the dialog font is proportional, so
+        # padded columns do not line up anyway
+        body = '\n'.join(
+            f'{name}: {value}'
+            for name, value in rows.items() if name != 'Cadenza')
+
+        box = QMessageBox(self)
+        box.setWindowTitle(f'About {APP_NAME}')
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(f'{APP_NAME} {__version__}')
+        box.setInformativeText(
+            'GPU-accelerated editor for multi-camera concert video.\n\n'
+            + body)
+        box.setDetailedText(
+            'Copy this when reporting a problem:\n\n' +
+            '\n'.join(f'{k}: {v}' for k, v in rows.items()))
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        return box
 
     def closeEvent(self, event):
         if self.project.is_dirty:
@@ -1528,13 +1639,20 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # build default config from sequence settings
+        # build default config from sequence settings. The width and
+        # height here were hardcoded to 1080p, so a 4K or portrait
+        # sequence exported at the wrong size and shape.
+        from render.export_config import suggest_output_path
         config = ExportConfig(
-            width        = 1920,
-            height       = 1080,
+            width        = seq.settings.width,
+            height       = seq.settings.height,
             fps          = seq.settings.fps,
             sample_rate  = seq.settings.sample_rate,
             channels     = seq.settings.audio_channels,
+            # named after the sequence, in the folder last exported
+            # to — the field used to open empty every time
+            output_path  = suggest_output_path(
+                self.project, seq, recent.last_dir(recent.EXPORTS)),
         )
 
         self._export_dialog = ExportDialog(
@@ -1561,6 +1679,11 @@ class MainWindow(QMainWindow):
             self._playback.pause()
 
         clips = list(self.project.clips.values())
+
+        # remember where this went: the project proposes it next time,
+        # and the folder seeds the next export whatever the project
+        self.project.export_path = config.output_path
+        recent.remember_dir(recent.EXPORTS, config.output_path)
 
         # the export shares the playback compositor, which may be set
         # to preview quality — render full size and restore afterwards
@@ -1768,6 +1891,9 @@ class MainWindow(QMainWindow):
 
     def _scrub_to_playhead(self):
         if not self.project.clips:
+            # nothing to show: clear it, rather than leaving whatever
+            # was on screen before the last clip was deleted
+            self.preview.clear()
             return
         if self._playback is None:
             self._init_playback()
@@ -1783,34 +1909,5 @@ class MainWindow(QMainWindow):
                     )
                 )
                 self.preview.display_frame(tensor)
-            except Exception as e:
-                print(f"Scrub error: {e}")
-
-    def _scrub_to_playhead_OLD(self):
-        """Show frame at current playhead position."""
-        print(f"DEBUG: _scrub_to_playhead called")
-        if not self.project.clips:
-            print(f"DEBUG: No clips found in project.clips")
-            return
-        if self._playback is None:
-            print(f"DEBUG: Initializing playback")
-            self._init_playback()
-        frame = self.app_state.playhead_frame
-        print(f"DEBUG: Playhead frame = {frame}")
-        clips = list(self.project.clips.values())
-        print(f"DEBUG: Found {len(clips)} clips")
-        if self._playback and self._playback._compositor:
-            try:
-                tensor = (
-                    self._playback
-                    ._compositor
-                    .composite_frame(
-                        clips, frame,
-                        sequence=self.project.active_sequence
-                    )
-                )
-                print(f"DEBUG: Compositor returned tensor shape: {tensor.shape}")
-                self.preview.display_frame(tensor)
-                print(f"DEBUG: Frame displayed successfully")
             except Exception as e:
                 print(f"Scrub error: {e}")

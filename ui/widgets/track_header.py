@@ -268,6 +268,7 @@ class TrackCanvas(QGraphicsView):
         self._init_scene()
 
         # connect signals
+        self._connected = True
         self.app_state.zoom_changed.connect(
             self._on_zoom_changed
         )
@@ -287,6 +288,29 @@ class TrackCanvas(QGraphicsView):
         self._razor_line_item      = None
         # override viewport cursor handling
         self.viewport().setMouseTracking(True)
+
+    def detach(self):
+        """
+        Let go before the row is torn down.
+
+        A refresh clears the scene and calls deleteLater on the row,
+        but the canvas stayed subscribed to app_state until Python
+        got round to collecting it — so a playhead move or a zoom in
+        between reached a canvas whose scene had already been emptied
+        and touched deleted C++ objects.
+        """
+        if not getattr(self, '_connected', False):
+            return
+        self._connected = False
+        for signal, slot in (
+            (self.app_state.zoom_changed, self._on_zoom_changed),
+            (self.app_state.playhead_changed, self._update_playhead),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass          # already gone
+        self._playhead_line = None
 
     def _init_scene(self):
         w = max(4000, self.width())
@@ -332,14 +356,29 @@ class TrackCanvas(QGraphicsView):
             self._playhead_line.setLine(x, 0, x, h)
         self._reposition_clips()
 
+    def scrollContentsBy(self, dx: int, dy: int):
+        """
+        Refuse to scroll sideways.
+
+        The scene is far wider than the viewport and the horizontal
+        scrollbar is hidden, so anything that scrolled the view —
+        Qt bringing a selected item into sight, a trackpad swipe —
+        shifted every clip away from the ruler with no scrollbar to
+        show it had happened or to get back. Panning is expressed in
+        the clip geometry itself, so the view must stay put.
+        """
+        if dx:
+            self.horizontalScrollBar().setValue(0)
+            dx = 0
+        super().scrollContentsBy(dx, dy)
+
     def set_h_offset(self, pixel_offset: float):
         """
-        Set horizontal scroll position.
-        Called by TimelinePanel when zoom/pan changes.
+        No longer used: panning lives in the clip geometry, not in
+        the view's scroll position. Kept as a no-op so anything still
+        calling it cannot knock the canvas out of alignment.
         """
-        self.horizontalScrollBar().setValue(
-            int(pixel_offset)
-        )
+        return
 
     # ── Clip management ──────────────────────────────────
 
@@ -411,6 +450,9 @@ class TrackCanvas(QGraphicsView):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        # the state needs the canvas width to know how much time the
+        # window shows; a resize keeps the zoom and reveals more
+        self.app_state.set_view_width(float(self.width()))
         self._on_zoom_changed(
             self.app_state.view_start,
             self.app_state.view_end

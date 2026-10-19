@@ -289,24 +289,29 @@ class Clip:
             return env.value_at(frame)
         return 1.0
 
+    # Dragging a rubber band sets the level for the whole clip. On a
+    # keyframed clip that moves the curve with it — these go through
+    # Envelope.set_default rather than writing default_value, which
+    # has no effect at all once keyframes exist.
+
     def set_volume(self, value: float):
-        """Set flat volume — no keyframes."""
+        """Set the clip's volume level."""
         self.volume = value
         env = self.envelopes.get('volume')
         if env:
-            env.default_value = value
+            env.set_default(value)
 
     def set_opacity(self, value: float):
-        """Set flat opacity — no keyframes."""
+        """Set the clip's opacity level."""
         env = self.envelopes.get('opacity')
         if env:
-            env.default_value = value
+            env.set_default(value)
 
     def set_pan(self, value: float):
-        """Set flat pan — no keyframes. -1=left, 0=center, 1=right"""
+        """Set the clip's pan. -1=left, 0=center, 1=right"""
         env = self.envelopes.get('pan')
         if env:
-            env.default_value = value
+            env.set_default(value)
         
 
     def _build_default_stack(self):
@@ -320,6 +325,50 @@ class Clip:
             self.effect_stack = default_video_only_stack()
         else:
             self.effect_stack = default_audio_stack()
+
+    def clone_effect_stack(self) -> List:
+        """
+        Independent copies of this clip's effects — params and enabled
+        state and all. Used when a cut makes a second clip that should
+        look exactly like this one, not like a fresh import.
+        """
+        from core.effects import EffectRegistry
+        stack = []
+        for eff in self.effect_stack:
+            copy = EffectRegistry.create(eff.id)
+            if copy is None:
+                # an effect that is no longer registered: copy the
+                # object itself rather than drop the settings
+                import copy as _copy
+                copy = _copy.copy(eff)
+            copy.enabled = eff.enabled
+            copy._params = dict(eff.get_all())
+            stack.append(copy)
+        return stack
+
+    def clone_envelopes(self, frame_offset: int = 0) -> dict:
+        """
+        Copies of the automation curves, retimed by frame_offset.
+
+        Envelopes are read at clip-local frames, so the right half of a
+        cut needs its keyframes moved earlier by however far into the
+        original clip the cut fell. Keyframes from before the cut are
+        kept at negative frames: the curve then still interpolates
+        across the cut, so a fade that spanned it stays smooth.
+        """
+        from core.envelope import Envelope, Keyframe
+        clones = {}
+        for key, env in self.envelopes.items():
+            clone = Envelope(
+                param=env.param,
+                default_value=env.default_value,
+            )
+            clone.keyframes = sorted(
+                Keyframe(kf.frame - frame_offset, kf.value)
+                for kf in env.keyframes
+            )
+            clones[key] = clone
+        return clones
 
     def get_effect(self, effect_id: str):
         return next(

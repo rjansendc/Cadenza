@@ -99,10 +99,6 @@ class ClipItem(QGraphicsRectItem):
 
     def update_geometry(self, sequence=None):
         """Recalculate position from zoom and track height."""
-        total = self.app_state.total_frames
-        if total <= 0:
-            return
-
         x1 = self.app_state.frame_to_pixel(
             self.clip.start_frame, self.view_width
         )
@@ -124,10 +120,11 @@ class ClipItem(QGraphicsRectItem):
                 track_h = TRACK_HEIGHT
         else:
             # fallback to fixed layout
+            n_video, _n_audio = self._track_counts()
             if self.clip.has_video:
-                row_idx = video_row(self.clip.track)
+                row_idx = video_row(self.clip.track, n_video)
             else:
-                row_idx = audio_row(self.clip.track)
+                row_idx = audio_row(self.clip.track, n_video)
             y_pos   = row_to_y(row_idx)
             track_h = TRACK_HEIGHT
 
@@ -144,9 +141,9 @@ class ClipItem(QGraphicsRectItem):
         Geometry for new TrackCanvas architecture.
         y always starts at 0 — each canvas = one track.
         """
-        total = self.app_state.total_frames
-        if total <= 0:
-            return
+        # Nothing here consults total_frames any more: the scale is
+        # absolute, so a clip can be laid out before the project
+        # extent is known.
 
         # use actual widget width if view_width not set
         w_px = self.view_width
@@ -556,17 +553,91 @@ class ClipItem(QGraphicsRectItem):
         val = max(0.0, min(1.0, val))
         return rect.top() + rect.height() * (0.75 - val * 0.50)
 
+    def _sync_total_frames(self):
+        """
+        Follow the content extent after an edit.
+
+        This only moves the scroll range now — the scale is absolute,
+        so nothing on screen rescales when the project gets longer.
+        """
+        panel = self._get_panel()
+        if panel is None:
+            return
+        win = panel.window()
+        if not (hasattr(win, 'project') and hasattr(win, 'app_state')):
+            return
+        if win.project.clips:
+            win.app_state.total_frames = max(
+                c.start_frame + c.duration
+                for c in win.project.clips.values()
+            )
+
+    def _trim_orig_end(self) -> int:
+        """
+        The timeline frame the clip ended on when the drag started.
+
+        A left trim pivots on the far edge, so it has to be measured
+        once at the press and not recomputed from a clip that is
+        changing under the mouse.
+        """
+        if self._trim_orig_out == -1:
+            duration = self.clip.source_frames - self._trim_orig_in
+        else:
+            duration = self._trim_orig_out - self._trim_orig_in
+        return self._trim_orig_start + max(1, duration)
+
+    def _is_still(self) -> bool:
+        """A single image, which has no source end to trim against."""
+        from core.clip import ClipType
+        if self.clip.clip_type == ClipType.IMAGE:
+            return True
+        import os
+        ext = os.path.splitext(self.clip.filepath)[1].lower()
+        return ext in ('.jpg', '.jpeg', '.png',
+                       '.bmp', '.tiff', '.tif')
+
+    def _trim_zone_width(self) -> float:
+        """
+        How wide a grab zone each edge gets.
+
+        Never more than a third of the clip, so a narrow clip keeps a
+        middle to drag by. A 10px zone on each end of a clip drawn only
+        a few pixels wide used to cover the whole thing, and since the
+        left edge was tested first every click read as a left trim —
+        so trying to stretch a short clip moved it instead.
+        """
+        return max(2.0, min(float(self.TRIM_ZONE),
+                            self.boundingRect().width() / 3.0))
+
     def _trim_edge_at(self, pos: QPointF):
         """Return 'left', 'right', or None."""
         rect = self.boundingRect()
-        if pos.x() <= rect.left() + self.TRIM_ZONE:
+        zone = self._trim_zone_width()
+        near_left  = pos.x() <= rect.left() + zone
+        near_right = pos.x() >= rect.right() - zone
+        if near_left and near_right:
+            # zones meeting on a tiny clip: take the closer edge
+            return ('left'
+                    if (pos.x() - rect.left()) <=
+                       (rect.right() - pos.x())
+                    else 'right')
+        if near_left:
             return 'left'
-        if pos.x() >= rect.right() - self.TRIM_ZONE:
+        if near_right:
             return 'right'
         return None
 
     def _near_envelope(self, pos: QPointF) -> bool:
+        """
+        Is the cursor on the opacity rubber band?
+
+        Not if it is in a trim zone: the band runs the full width of
+        the clip and sits about a quarter down a 40px row, so it
+        crosses both grab zones and would take the click first.
+        """
         if not self.clip.has_video:
+            return False
+        if self._trim_edge_at(pos) is not None:
             return False
         rect  = self.boundingRect()
         env_y = self._envelope_y(rect)
@@ -789,16 +860,6 @@ class ClipItem(QGraphicsRectItem):
                 f'{"enabled" if self.clip.enabled else "disabled"}'
             )
 
-    def _track_is_locked(self) -> bool:
-        """Check if the track this clip is on is locked."""
-        try:
-            canvas = self._get_my_canvas()
-            if canvas:
-                return canvas.track.locked
-        except Exception:
-            pass
-        return False
-
     def _get_my_canvas(self):
         """Return the TrackCanvas this item lives in."""
         try:
@@ -886,6 +947,12 @@ class ClipItem(QGraphicsRectItem):
                 self._trim_orig_start = (
                     self.clip.start_frame
                 )
+                # the link group trims with it, so remember where
+                # every member started
+                for item in self._all_linked_items():
+                    item._trim_orig_in    = item.clip.in_point
+                    item._trim_orig_out   = item.clip.out_point
+                    item._trim_orig_start = item.clip.start_frame
                 # grab mouse so we get all move events
                 self.grabMouse()
                 event.accept()
@@ -964,13 +1031,14 @@ class ClipItem(QGraphicsRectItem):
             self._drag_orig_frame = self.clip.start_frame
             self._drag_orig_track = self.clip.track
 
+            n_video, _n_audio = self._track_counts()
             if self.clip.has_video:
                 self._drag_orig_row = video_row(
-                    self.clip.track
+                    self.clip.track, n_video
                 )
             else:
                 self._drag_orig_row = audio_row(
-                    self.clip.track
+                    self.clip.track, n_video
                 )
 
             # store orig on linked items (same canvas)
@@ -1022,7 +1090,23 @@ class ClipItem(QGraphicsRectItem):
             delta_f = self._px_to_frame_delta(
                 delta_px
             )
-            if self._trim_edge == 'left':
+            if self._trim_edge == 'left' and self._is_still():
+                # A still has no source to run out of, so its left
+                # edge extends as freely as its right one: the edge
+                # goes where the mouse is and the clip grows to meet
+                # it. Footage can only give back frames it has, which
+                # is why that case is handled separately below —
+                # applying it to stills meant the left edge stopped
+                # dead at in_point 0 and the only way to make a slide
+                # start earlier was to move it and re-stretch.
+                end  = self._trim_orig_end()
+                start = max(0, self._trim_orig_start + delta_f)
+                start = min(start, end - 1)
+                self.clip.start_frame = start
+                self.clip.out_point   = (
+                    self.clip.in_point + (end - start)
+                )
+            elif self._trim_edge == 'left':
                 # left trim: move in_point and start_frame
                 new_in = max(
                     0,
@@ -1034,6 +1118,14 @@ class ClipItem(QGraphicsRectItem):
                         new_in,
                         self.clip.out_point - 1
                     )
+                # ...nor drag the clip off the front of the timeline.
+                # Giving back more handles than there is room for put
+                # start_frame negative: a clip at frame 100 trimmed in
+                # by 500 ended up starting at -400.
+                new_in = max(
+                    new_in,
+                    self._trim_orig_in - self._trim_orig_start
+                )
                 frame_delta = (
                     new_in - self._trim_orig_in
                 )
@@ -1042,28 +1134,27 @@ class ClipItem(QGraphicsRectItem):
                     self._trim_orig_start + frame_delta
                 )
             else:
-                # right trim: move out_point
-                # Images have no real source limit — allow any length
-                import os
-                ext = os.path.splitext(
-                    self.clip.filepath)[1].lower()
-                is_image = ext in ('.jpg', '.jpeg', '.png',
-                                    '.bmp', '.tiff', '.tif')
-                max_out = (self.app_state.total_frames
-                           if is_image
-                           else self.clip.source_frames)
+                # right trim: move out_point.
+                # A still has no source end, so it stretches as far as
+                # you drag. Footage stops at its last frame. This used
+                # to clamp a still against total_frames — a timeline
+                # length limiting a source position, which capped the
+                # stretch at wherever the project happened to end.
+                if self._is_still():
+                    max_out = None
+                else:
+                    max_out = self.clip.source_frames
                 if self._trim_orig_out == -1:
                     orig_out = self.clip.source_frames
                 else:
                     orig_out = self._trim_orig_out
-                new_out = max(
-                    self.clip.in_point + 1,
-                    min(
-                        max_out,
-                        orig_out + delta_f
-                    )
+                new_out = orig_out + delta_f
+                if max_out is not None:
+                    new_out = min(max_out, new_out)
+                self.clip.out_point = max(
+                    self.clip.in_point + 1, new_out
                 )
-                self.clip.out_point = new_out
+            self._apply_trim_to_linked()
             self.update_geometry_flat()
             self.update()
             if self.scene():
@@ -1083,7 +1174,7 @@ class ClipItem(QGraphicsRectItem):
             env = self.clip.envelopes.get('opacity')
             if env:
                 old_val = self._env_start_val
-                env.default_value = new_val
+                self.clip.set_opacity(new_val)
                 # Push to undo stack (merges rapid drags into one step)
                 from core.undo import undo_stack, SetOpacityCommand
                 undo_stack.push(SetOpacityCommand(
@@ -1199,15 +1290,14 @@ class ClipItem(QGraphicsRectItem):
         event.accept()
 
     def _px_to_frame_delta(self, dx: float) -> int:
-        """Convert scene pixel delta to frame delta."""
-        w = self.view_width
-        if w <= 0:
-            views = self.scene().views()
-            w = float(views[0].width()) if views else 1000.0
-        total   = self.app_state.total_frames or 1
-        visible = self.app_state.visible_range
-        frames_per_px = (total * visible) / w
-        return int(dx * frames_per_px)
+        """
+        Convert scene pixel delta to frame delta.
+
+        The scale is absolute, so this no longer depends on the project
+        length or the window width — a 10px drag covers the same number
+        of frames whatever else is on the timeline.
+        """
+        return int(round(dx * self.app_state.frames_per_pixel()))
 
     def _snap_frame(self, frame: int,
                     exclude_id: str,
@@ -1251,14 +1341,12 @@ class ClipItem(QGraphicsRectItem):
         except Exception:
             pass
 
-        # find nearest snap point
-        # Use visible frames (not total) so threshold stays
-        # proportional to what's actually shown on screen
-        visible_frames = (self.app_state.total_frames *
-                          self.app_state.visible_range)
+        # find nearest snap point. The threshold is a distance on
+        # screen, so it converts straight through the scale.
         threshold = max(
             1,
-            int(SNAP_THRESHOLD_PX * visible_frames / w)
+            int(round(SNAP_THRESHOLD_PX *
+                      self.app_state.frames_per_pixel()))
         )
 
         best      = frame
@@ -1385,6 +1473,88 @@ class ClipItem(QGraphicsRectItem):
                     )
                     item.update_geometry_flat()
 
+    def _sequence(self):
+        """The sequence this clip belongs to, if reachable."""
+        panel = self._get_panel()
+        if panel is None:
+            return None
+        try:
+            return panel.project.active_sequence
+        except Exception:
+            return None
+
+    def _track_counts(self) -> tuple:
+        """(video, audio) track counts — the sequence's, not the
+        module defaults, which are only right for a 3+3 timeline."""
+        from ui.constants import NUM_VIDEO_TRACKS, NUM_AUDIO_TRACKS
+        seq = self._sequence()
+        if seq is None:
+            return NUM_VIDEO_TRACKS, NUM_AUDIO_TRACKS
+        return len(seq.video_tracks), len(seq.audio_tracks)
+
+    def _all_linked_items(self) -> list:
+        """
+        Every other ClipItem in this clip's link group, across all
+        canvases — a clip's audio lives on a different canvas from its
+        picture, so the same-scene search alone never finds it.
+        """
+        if not self.clip.link_group_id:
+            return []
+        panel = self._get_panel()
+        if panel is None:
+            return self._get_linked_items()
+        found = []
+        for row in panel._rows.values():
+            for _cid, item in row.canvas._clip_items.items():
+                if (item is not self and
+                        item.clip.link_group_id ==
+                        self.clip.link_group_id):
+                    found.append(item)
+        return found
+
+    def _apply_trim_to_linked(self):
+        """
+        Carry a trim to the clips linked to this one.
+
+        A camera angle and its sound are one take: trimming the picture
+        has to trim the audio with it or they drift apart. Edges are
+        matched on the timeline, each clamped by its own source — so a
+        stream that runs out first stops where it must.
+        """
+        for item in self._all_linked_items():
+            c = item.clip
+            if self._trim_edge == 'left':
+                # the left edge moved this far along the timeline
+                delta  = self.clip.start_frame - self._trim_orig_start
+                new_in = max(0, item._trim_orig_in + delta)
+                if c.out_point != -1:
+                    new_in = min(new_in, c.out_point - 1)
+                c.in_point    = new_in
+                c.start_frame = (item._trim_orig_start +
+                                 (new_in - item._trim_orig_in))
+            else:
+                new_out = c.in_point + self.clip.duration
+                if not item._is_still() and c.source_frames > 0:
+                    new_out = min(new_out, c.source_frames)
+                c.out_point = max(c.in_point + 1, new_out)
+            item.update_geometry_flat()
+            item.update()
+
+    def _trim_command_for(self, item):
+        """A TrimClipCommand for this item, or None if it didn't move."""
+        from core.undo import TrimClipCommand
+        c = item.clip
+        if (c.in_point    == item._trim_orig_in and
+                c.out_point   == item._trim_orig_out and
+                c.start_frame == item._trim_orig_start):
+            return None
+        return TrimClipCommand(
+            c,
+            item._trim_orig_in, item._trim_orig_out,
+            item._trim_orig_start,
+            c.in_point, c.out_point, c.start_frame,
+        )
+
     def _get_linked_items(self) -> list:
         """
         Find all other ClipItems in the same 
@@ -1428,6 +1598,23 @@ class ClipItem(QGraphicsRectItem):
         self._env_dragging = False
         if self._trim_edge is not None:
             self.ungrabMouse()
+            # the edges moved as the mouse went; make the whole link
+            # group one undo step
+            from core.undo import undo_stack, CompoundCommand
+            items = [self] + self._all_linked_items()
+            cmds  = [c for c in (self._trim_command_for(i) for i in items)
+                     if c is not None]
+            if len(cmds) == 1:
+                undo_stack.push(cmds[0], execute=False)
+            elif cmds:
+                group = CompoundCommand('Trim Clips')
+                for cmd in cmds:
+                    group.add(cmd)
+                undo_stack.push(group, execute=False)
+            if cmds:
+                for item in items:
+                    self.app_state.clip_modified.emit(item.clip.id)
+                self._sync_total_frames()
         self._trim_edge = None
 
         # Push undo for drag if position changed
@@ -1465,16 +1652,8 @@ class ClipItem(QGraphicsRectItem):
                     undo_stack.push(cmd)
 
         self._drag_start = None
-        # Recalculate total_frames after move
-        if moved_clips and panel:
-            project = None
-            w = panel.window()
-            if hasattr(w, 'project') and hasattr(w, 'app_state'):
-                if w.project.clips:
-                    w.app_state.total_frames = max(
-                        c.start_frame + c.duration
-                        for c in w.project.clips.values()
-                    )
+        if moved_clips:
+            self._sync_total_frames()
         event.accept()
 
     def _would_overlap(self, new_frame: int,

@@ -2,6 +2,25 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 
+# What range each curve lives in, by parameter. These match the clamps
+# the renderer applies when it reads them. Envelopes belonging to an
+# effect parameter are keyed "<effect>.<param>" and carry their range in
+# the effect's own ParamDef, so they are left unclamped here.
+PARAM_RANGES = {
+    'opacity': (0.0, 1.0),
+    'volume':  (0.0, 2.0),      # 2.0 = +6dB
+    'pan':     (-1.0, 1.0),     # -1 left, +1 right
+}
+
+
+def _clamp(value: float, lo, hi) -> float:
+    if lo is not None:
+        value = max(lo, value)
+    if hi is not None:
+        value = min(hi, value)
+    return value
+
+
 @dataclass
 class Keyframe:
     frame: int
@@ -23,6 +42,11 @@ class Envelope:
     keyframes:     List[Keyframe] = field(
         default_factory=list
     )
+
+    @property
+    def value_range(self) -> tuple:
+        """(low, high) for this parameter, (None, None) if unbounded."""
+        return PARAM_RANGES.get(self.param, (None, None))
 
     def value_at(self, frame: int) -> float:
         """
@@ -59,16 +83,37 @@ class Envelope:
         return self.default_value
 
     def set_default(self, value: float):
-        """Drag whole line — no keyframes."""
-        self.default_value = value
-        # if no keyframes this is all we need
-        # if keyframes exist, shift all by delta
+        """
+        Move the whole curve — what dragging the rubber band does.
+
+        With no keyframes that is just the flat value. With keyframes
+        the curve shifts bodily, so a fade keeps its shape and only its
+        level changes.
+
+        The shift is limited so that no keyframe leaves the parameter's
+        range, rather than clamping each keyframe on its own: clamping
+        individually would flatten the curve against the limit and the
+        shape would not come back when dragged the other way.
+
+        The delta used to be computed after default_value had already
+        been overwritten, so it was always zero and the keyframes never
+        moved at all.
+        """
+        lo, hi = self.value_range
+
         if self.keyframes:
             delta = value - self.default_value
-            for kf in self.keyframes:
-                kf.value = max(0.0, min(
-                    2.0, kf.value + delta
-                ))
+            if delta > 0 and hi is not None:
+                headroom = hi - max(kf.value for kf in self.keyframes)
+                delta = min(delta, max(0.0, headroom))
+            elif delta < 0 and lo is not None:
+                headroom = lo - min(kf.value for kf in self.keyframes)
+                delta = max(delta, min(0.0, headroom))
+            if delta:
+                for kf in self.keyframes:
+                    kf.value = kf.value + delta
+
+        self.default_value = _clamp(value, lo, hi)
 
     def add_keyframe(self, frame: int,
                       value: float):

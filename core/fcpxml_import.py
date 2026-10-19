@@ -502,7 +502,10 @@ def main(argv=None):
     print(report.summary())
 
     if args.output and not args.report:
-        project.save(args.output)
+        from core.project_io import save_project
+        if not save_project(project, args.output):
+            print(f"\ncould not write {args.output}")
+            return 1
         print(f"\nwrote {args.output}")
     return 0
 

@@ -1,5 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+# Stamp the exe with the app version. Generated here from
+# core/version.py so Cadenza.exe's file properties always agree with
+# what the About box says.
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.abspath(SPECPATH))
+from tools.version_file import write_version_file
+from core.version import __version__ as _app_version
+
+_version_resource = write_version_file()
+print(f"[spec] Cadenza {_app_version} -> {_version_resource}")
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -48,6 +59,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='icons/app.ico',
+    version=_version_resource,
 )
 coll = COLLECT(
     exe,

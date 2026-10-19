@@ -361,7 +361,8 @@ class VideoDecoder:
         is four times that). Any format the fast path does not handle
         falls back to libswscale.
         """
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        from gpu.device import compute_device
+        device = compute_device()
         try:
             from gpu.yuv import frame_to_rgb_tensor
             return frame_to_rgb_tensor(frame, device=device)
@@ -373,9 +374,10 @@ class VideoDecoder:
             ).to(device)
 
     def _blank_frame(self) -> torch.Tensor:
+        from gpu.device import compute_device
         return torch.zeros(
             self.height, self.width, 3,
-            dtype=torch.uint8, device='cuda'
+            dtype=torch.uint8, device=compute_device()
         )
 
     def _close_container(self):
@@ -483,8 +485,16 @@ class ImageDecoder:
         arr = arr[:, :w * 3].reshape(h, w, 3)
         return torch.from_numpy(arr.copy()).float()
 
-    def get_frame(self, frame_idx: int):
-        """Return the image as a tensor for any frame index."""
+    def get_frame(self, frame_idx: int,
+                   draft: bool = False):
+        """
+        Return the image as a tensor for any frame index.
+
+        draft is accepted and ignored: a still has nothing cheaper to
+        decode. The compositor passes it to every decoder, so without
+        the parameter every image frame raised TypeError and the clip
+        never appeared.
+        """
         with self._lock:
             if self._frame_cache is None:
                 self._frame_cache = self._load_frame()

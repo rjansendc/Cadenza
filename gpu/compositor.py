@@ -55,6 +55,20 @@ class Compositor:
             dtype=torch.uint8
         )
 
+    def _warn_once(self, key: str, message: str):
+        """
+        Report a problem the first time only.
+
+        These paths run per clip per frame, so an unconditional print
+        buries the console at 30fps — which is how two separate bugs
+        spent a long time looking like identical dropped frames.
+        """
+        seen = self.__dict__.setdefault('_warned', set())
+        if key in seen:
+            return
+        seen.add(key)
+        print(message, flush=True)
+
     def set_use_proxies(self, enabled: bool):
         """Switch between proxy and original media (export uses originals)."""
         if enabled == self.use_proxies:
@@ -246,7 +260,7 @@ class Compositor:
                 src_w = renderer.clip.source_width or 0
                 src_scale = (src_w / frame_tensor.shape[1]
                              if src_w and frame_tensor.shape[1] else 1.0)
-                frame_tensor = self._apply_motion(
+                frame_tensor, coverage = self._apply_motion(
                     frame_tensor, motion, src_scale
                 )
 
@@ -262,7 +276,16 @@ class Compositor:
                 if ramp is not None:
                     opacity *= ramp
 
-                if opacity >= 1.0:
+                # How much of this clip lands on each pixel: its
+                # opacity where it has picture, nothing where it does
+                # not. A scaled or offset clip leaves the tracks below
+                # it showing around the edges.
+                if coverage is None:
+                    alpha = opacity
+                else:
+                    alpha = coverage.squeeze(0).permute(1, 2, 0) * opacity
+
+                if coverage is None and opacity >= 1.0:
                     canvas = frame_tensor
                 else:
                     if canvas is None:
@@ -272,11 +295,14 @@ class Compositor:
                             device=frame_tensor.device
                         )
                     canvas = (
-                        canvas * (1.0 - opacity) +
-                        frame_tensor * opacity
+                        canvas * (1.0 - alpha) +
+                        frame_tensor * alpha
                     )
             except Exception as e:
-                import traceback; traceback.print_exc()
+                self._warn_once(
+                    f"composite:{renderer.clip.id}:{type(e).__name__}",
+                    f"Compositing {renderer.clip.name} failed: "
+                    f"{type(e).__name__}: {e}")
                 continue
 
         if canvas is None:
@@ -308,6 +334,8 @@ class Compositor:
 
         try:
             frame = decoder.get_frame(source_frame, draft=draft)
+            if frame is None:
+                return None
             # decord may return numpy in worker threads
             # if torch bridge not set — convert defensively
             if not isinstance(frame, torch.Tensor):
@@ -317,8 +345,22 @@ class Compositor:
                     else frame.__array__()
                 )
             return frame.float()
+        except (TypeError, AttributeError) as e:
+            # A signature or attribute mismatch is a bug in Cadenza,
+            # not a bad file — say which decoder, and say it once per
+            # kind so playback does not flood the console. A missing
+            # keyword argument on ImageDecoder once looked exactly
+            # like a damaged image here.
+            self._warn_once(
+                f"{type(decoder).__name__}.{type(e).__name__}",
+                f"[bug] {type(decoder).__name__}.get_frame: {e} "
+                f"({renderer.clip.name})")
+            return None
         except Exception as e:
-            print(f"Frame decode error: {e}")
+            self._warn_once(
+                f"decode:{renderer.clip.filepath}",
+                f"Frame decode error ({renderer.clip.name}): "
+                f"{type(e).__name__}: {e}")
             return None
 
     def _get_frames(self, renderers, playhead_frame: int,
@@ -426,9 +468,19 @@ class Compositor:
                        frame: torch.Tensor,
                        motion: dict,
                        src_scale: float = 1.0
-                       ) -> torch.Tensor:
+                       ) -> tuple:
         """
         Apply motion to frame.
+
+        Returns (rgb, coverage). Coverage is None when the picture
+        fills the canvas, else a [1,1,H,W] mask that is 1 where the
+        clip has picture and 0 where it does not — scaled down,
+        offset, rotated and cropped clips all leave canvas showing.
+
+        Without it the compositor treated the black padding around a
+        shrunken clip as picture, so an opaque picture-in-picture on
+        V2 blanked out V1 entirely.
+
         Fast path: if centered and no rotation,
         just interpolate directly to canvas size.
         """
@@ -508,6 +560,11 @@ class Compositor:
 
         t = frame.permute(2, 0, 1).unsqueeze(0) / 255.0
 
+        # A fourth channel of ones rides along through every resize,
+        # rotate and paste below, so whatever geometry happens to the
+        # picture happens to its coverage as well.
+        t = torch.cat([t, torch.ones_like(t[:, :1])], dim=1)
+
         # --- FAST PATH ---
         # centered clip, no rotation → single interpolate
         # to canvas size. Skips canvas allocation + paste.
@@ -539,7 +596,8 @@ class Compositor:
                 mode='bilinear',
                 align_corners=False
             )
-            return t.squeeze(0).permute(1, 2, 0) * 255.0
+            rgb = t[:, :3].squeeze(0).permute(1, 2, 0) * 255.0
+            return rgb, None          # fills the canvas
 
         # --- FULL PATH — offset/rotated clips ---
         src_h = frame.shape[0]
@@ -585,9 +643,11 @@ class Compositor:
             new_h = t.shape[2]
             new_w = t.shape[3]
 
+        # the frame is already somewhere — put the canvas there too,
+        # rather than naming a device this machine may not have
         canvas = torch.zeros(
-            1, 3, self.height, self.width,
-            dtype=torch.float32, device='cuda'
+            1, 4, self.height, self.width,
+            dtype=torch.float32, device=t.device
         )
 
         # Anchor point: the spot in the source that sits at Position,
@@ -639,7 +699,9 @@ class Compositor:
                 t[0, :, sy1:sy2, sx1:sx2]
             )
 
-        return canvas.squeeze(0).permute(1, 2, 0) * 255.0
+        rgb      = canvas[:, :3].squeeze(0).permute(1, 2, 0) * 255.0
+        coverage = canvas[:, 3:4]
+        return rgb, coverage
 
     def _fit_to_canvas(self,
                         frame: torch.Tensor

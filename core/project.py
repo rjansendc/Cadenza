@@ -93,6 +93,10 @@ class Project:
         default_factory=dict
     )
 
+    # where this project was last exported, so a re-export proposes
+    # the same file instead of an empty field
+    export_path: Optional[str] = None
+
     # app state (not saved — runtime only)
     is_dirty: bool = False   # unsaved changes flag
 
@@ -235,14 +239,15 @@ class Project:
         n_video = len(seq.video_tracks) if seq else 3
         n_audio = len(seq.audio_tracks) if seq else 3
 
-        # determine slot from drop row
-        if row_is_video(drop_row):
-            slot = (n_video - 1) - drop_row
+        # Which slot the drop row means, within its own section.
+        # row_is_video needs this sequence's video count, and an audio
+        # row has to be clamped against the audio tracks: clamping it
+        # to n_video dropped A4 onto A3 whenever there were more audio
+        # tracks than video ones.
+        if row_is_video(drop_row, n_video):
+            slot = max(0, min((n_video - 1) - drop_row, n_video - 1))
         else:
-            slot = drop_row - n_video
-
-        # clamp slot
-        slot = max(0, min(slot, n_video - 1))
+            slot = max(0, min(drop_row - n_video, max(0, n_audio - 1)))
 
         # shared link group
         group_id = str(uuid.uuid4())
@@ -252,7 +257,7 @@ class Project:
         if stream_info.get('video_count', 0) > 0:
             video_clip = self.add_clip(
                 media_item,
-                track=slot,
+                track=min(slot, n_video - 1),
                 start_frame=start_frame,
                 has_video=True,
                 has_audio=False,
@@ -357,226 +362,12 @@ class Project:
         ]
 
     # --- Persistence ---
+    # save/load live in core/project_io.py. A second pair used to
+    # sit here, writing version '1.0.0' as a string against
+    # project_io's integer PROJECT_VERSION, so the app raised
+    # TypeError on its own files — and it dropped every keyframe
+    # and transition besides.
 
-    def save(self, path: str = None):
-        """Save project to .veproj JSON file."""
-        save_path = path or self.project_path
-        if not save_path:
-            raise ValueError("No save path specified")
-        self.project_path = save_path
-
-        # Serialize media pool
-        media_pool = {}
-        for mid, item in self.media_pool.items():
-            media_pool[mid] = {
-                'id':             item.id,
-                'filepath':       item.filepath,
-                'name':           item.name,
-                'has_video':      item.has_video,
-                'has_audio':      item.has_audio,
-                'source_width':   getattr(item, 'source_width',  0),
-                'source_height':  getattr(item, 'source_height', 0),
-                'source_fps':     getattr(item, 'source_fps',    29.97),
-                'source_frames':  getattr(item, 'source_frames', 0),
-                'source_duration':getattr(item, 'source_duration', 0.0),
-            }
-
-        # Serialize clips
-        clips = []
-        for clip in self.clips.values():
-            # Serialize effect params
-            effects = []
-            for eff in clip.effect_stack:
-                effects.append({
-                    'id':      eff.id,
-                    'enabled': eff.enabled,
-                    'params':  eff.get_all(),
-                })
-            # Serialize envelopes
-            envelopes = {}
-            for env_name, env in clip.envelopes.items():
-                envelopes[env_name] = {
-                    'default_value': env.default_value,
-                }
-            clips.append({
-                'id':            clip.id,
-                'filepath':      clip.filepath,
-                'track':         clip.track,
-                'start_frame':   clip.start_frame,
-                'in_point':      clip.in_point,
-                'out_point':     clip.out_point,
-                'has_video':     clip.has_video,
-                'has_audio':     clip.has_audio,
-                'source_width':  clip.source_width,
-                'source_height': clip.source_height,
-                'source_fps':    clip.source_fps,
-                'source_frames': clip.source_frames,
-                'stream_index':  clip.stream_index,
-                'link_group_id': clip.link_group_id,
-                'enabled':       clip.enabled,
-                'muted':         clip.muted,
-                'volume':        clip.volume,
-                'label_color':   clip.label_color,
-                'effects':       effects,
-                'envelopes':     envelopes,
-            })
-
-        # Serialize sequences
-        sequences = []
-        for seq in self.sequences.values():
-            sequences.append({
-                'id':   seq.id,
-                'name': seq.name,
-                'settings': {
-                    'width':       seq.settings.width,
-                    'height':      seq.settings.height,
-                    'fps':         seq.settings.fps,
-                    'sample_rate': seq.settings.sample_rate,
-                },
-                'video_tracks': [
-                    {'index': t.index, 'name': t.name,
-                     'locked': t.locked, 'visible': t.visible}
-                    for t in seq.video_tracks
-                ],
-                'audio_tracks': [
-                    {'index': t.index, 'name': t.name,
-                     'locked': t.locked, 'muted': t.muted}
-                    for t in seq.audio_tracks
-                ],
-            })
-
-        data = {
-            'version':    '1.0.0',
-            'name':       self.name,
-            'id':         self.id,
-            'media_pool': media_pool,
-            'clips':      clips,
-            'sequences':  sequences,
-        }
-
-        with open(save_path, 'w') as f:
-            json.dump(data, f, indent=2)
-        self.is_dirty = False
-        print(f"[Save] {len(clips)} clips, "
-              f"{len(media_pool)} media items → {save_path}")
-
-    @classmethod
-    def load(cls, path: str) -> 'Project':
-        """Load project from .veproj JSON file."""
-        with open(path, 'r') as f:
-            data = json.load(f)
-
-        version = data.get('version', '0.1.0')
-        project = cls(name=data.get('name', 'Untitled'))
-        project.project_path = path
-        project.id = data.get('id', project.id)
-
-        # Legacy stub format — nothing to load
-        if version == '0.1.0':
-            print("[Load] Legacy project format — no clips saved")
-            return project
-
-        # Restore media pool
-        from core.project import MediaPoolItem
-        for mid, mdata in data.get('media_pool', {}).items():
-            item = MediaPoolItem(
-                filepath=mdata['filepath'],
-                name=mdata.get('name', ''),
-            )
-            item.id             = mdata['id']
-            item.has_video      = mdata.get('has_video', True)
-            item.has_audio      = mdata.get('has_audio', True)
-            item.source_width   = mdata.get('source_width',   0)
-            item.source_height  = mdata.get('source_height',  0)
-            item.source_fps     = mdata.get('source_fps',     29.97)
-            item.source_frames  = mdata.get('source_frames',  0)
-            item.source_duration= mdata.get('source_duration',0.0)
-            project.media_pool[item.id] = item
-
-        # Restore sequences
-        from core.track import Sequence, SequenceSettings, Track, TrackType
-        for sdata in data.get('sequences', []):
-            ss = sdata.get('settings', {})
-            settings = SequenceSettings(
-                width=ss.get('width', 1920),
-                height=ss.get('height', 1080),
-                fps=ss.get('fps', 29.97),
-                sample_rate=ss.get('sample_rate', 48000),
-            )
-            seq = Sequence(
-                id=sdata['id'],
-                name=sdata.get('name', 'Sequence 1'),
-                settings=settings,
-            )
-            vtracks = sdata.get('video_tracks', [])
-            atracks = sdata.get('audio_tracks', [])
-            seq.video_tracks = [
-                Track(TrackType.VIDEO, t['index'])
-                for t in vtracks
-            ] if vtracks else [Track(TrackType.VIDEO, i)
-                                for i in range(3)]
-            for i, t in enumerate(vtracks):
-                seq.video_tracks[i].locked  = t.get('locked',  False)
-                seq.video_tracks[i].visible = t.get('visible', True)
-            seq.audio_tracks = [
-                Track(TrackType.AUDIO, t['index'])
-                for t in atracks
-            ] if atracks else [Track(TrackType.AUDIO, i)
-                                for i in range(3)]
-            for i, t in enumerate(atracks):
-                seq.audio_tracks[i].locked = t.get('locked', False)
-                seq.audio_tracks[i].muted  = t.get('muted',  False)
-            project.sequences[seq.id] = seq
-
-        if not project.sequences:
-            seq = Sequence()
-            project.sequences[seq.id] = seq
-
-        # Restore clips
-        from core.clip import Clip
-        from core.effects import EffectRegistry
-        for cdata in data.get('clips', []):
-            clip = Clip(
-                filepath=    cdata['filepath'],
-                track=       cdata['track'],
-                start_frame= cdata['start_frame'],
-                in_point=    cdata['in_point'],
-                out_point=   cdata['out_point'],
-                has_video=   cdata.get('has_video',  True),
-                has_audio=   cdata.get('has_audio',  False),
-                source_width= cdata.get('source_width',  1920),
-                source_height=cdata.get('source_height', 1080),
-                source_fps=  cdata.get('source_fps',   29.97),
-                source_frames=cdata.get('source_frames', 0),
-                stream_index= cdata.get('stream_index',  0),
-                link_group_id=cdata.get('link_group_id'),
-                enabled=     cdata.get('enabled',  True),
-                muted=       cdata.get('muted',    False),
-                volume=      cdata.get('volume',   1.0),
-                label_color= cdata.get('label_color', ''),
-            )
-            clip.id = cdata['id']
-
-            # Restore effect params
-            for edata in cdata.get('effects', []):
-                for eff in clip.effect_stack:
-                    if eff.id == edata['id']:
-                        eff.enabled = edata.get('enabled', True)
-                        for k, v in edata.get('params', {}).items():
-                            eff._params[k] = v
-                        break
-
-            # Restore envelopes
-            for env_name, edata in cdata.get('envelopes', {}).items():
-                if env_name in clip.envelopes:
-                    clip.envelopes[env_name].default_value = (
-                        edata.get('default_value', 1.0))
-
-            project.clips[clip.id] = clip
-
-        print(f"[Load] {len(project.clips)} clips, "
-              f"{len(project.media_pool)} media → {path}")
-        return project
 
     def __repr__(self):
         return (f"Project({self.name} | "
@@ -634,9 +425,15 @@ class Project:
                 volume=c.volume,
                 label_color=c.label_color,
             )
-            # copy effect stack state
-            right.effect_stack = []
-            right._build_default_stack()
+            # Carry the clip's look across the cut. This used to
+            # rebuild the default stack, so the right half of every
+            # razor cut lost its grade, motion and keyframes — the
+            # comment said "copy effect stack state" while the code
+            # threw it away.
+            right.effect_stack = c.clone_effect_stack()
+            right.envelopes    = c.clone_envelopes(
+                frame_offset=frame - c.start_frame
+            )
 
             # trim left half in place
             c.out_point = c.in_point + (

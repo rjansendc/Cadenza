@@ -12,7 +12,7 @@ can see progress and cancel if needed.
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton,
-    QComboBox, QProgressBar, QFileDialog,
+    QComboBox, QSpinBox, QProgressBar, QFileDialog,
     QRadioButton, QButtonGroup, QGroupBox,
     QWidget, QSizePolicy, QFrame
 )
@@ -209,10 +209,31 @@ class ExportDialog(QDialog):
         row = QHBoxLayout()
         row.addWidget(QLabel('Resolution:'))
         self._res_combo = QComboBox()
-        for label in RESOLUTION_PRESETS:
-            self._res_combo.addItem(label)
+        for label, size in RESOLUTION_PRESETS.items():
+            # the size rides with the row: looking the label back up
+            # in the preset dict meant any size that was not a preset
+            # silently fell back to 1080p
+            self._res_combo.addItem(label, size)
+        # Custom last, so any size at all can be exported — the dialog
+        # offered presets only, with no way to type a size in
+        self._res_combo.addItem('Custom...', None)
+        self._res_combo.currentIndexChanged.connect(
+            self._on_res_changed)
         row.addWidget(self._res_combo)
         layout.addLayout(row)
+
+        # custom width/height, shown only when Custom is chosen
+        self._custom_row = QHBoxLayout()
+        self._custom_row.addWidget(QLabel('W:'))
+        self._w_spin = QSpinBox()
+        self._w_spin.setRange(16, 7680)
+        self._custom_row.addWidget(self._w_spin)
+        self._custom_row.addWidget(QLabel('H:'))
+        self._h_spin = QSpinBox()
+        self._h_spin.setRange(16, 7680)
+        self._custom_row.addWidget(self._h_spin)
+        self._custom_row.addStretch()
+        layout.addLayout(self._custom_row)
 
         # quality
         row2 = QHBoxLayout()
@@ -340,6 +361,13 @@ class ExportDialog(QDialog):
         line.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(line)
 
+    def _on_res_changed(self, index):
+        custom = self._res_combo.itemData(index) is None
+        for i in range(self._custom_row.count()):
+            widget = self._custom_row.itemAt(i).widget()
+            if widget:
+                widget.setVisible(custom)
+
     # =========================================================
     # Field population
     # =========================================================
@@ -347,13 +375,20 @@ class ExportDialog(QDialog):
     def _populate_fields(self):
         cfg = self._config
 
-        # resolution
-        target = f"{cfg.width} x {cfg.height}"
-        for i, label in enumerate(RESOLUTION_PRESETS):
-            w, h = RESOLUTION_PRESETS[label]
-            if w == cfg.width and h == cfg.height:
-                self._res_combo.setCurrentIndex(i)
-                break
+        # where it will go, worked out by the caller
+        if cfg.output_path:
+            self._path_edit.setText(cfg.output_path)
+
+        # Resolution. The sequence's own size goes first and is the
+        # default — a sequence that is not one of the presets (a
+        # camera-native size, say) could not be chosen at all before.
+        size = (cfg.width, cfg.height)
+        self._res_combo.insertItem(
+            0, f'{cfg.width} x {cfg.height}  (Sequence)', size)
+        self._res_combo.setCurrentIndex(0)
+        self._w_spin.setValue(cfg.width)
+        self._h_spin.setValue(cfg.height)
+        self._on_res_changed(0)
 
         # quality
         for i, (label, crf) in enumerate(
@@ -423,7 +458,7 @@ class ExportDialog(QDialog):
         path, _ = QFileDialog.getSaveFileName(
             self,
             'Export to MP4',
-            self._path_edit.text() or
+            self._path_edit.text() or self._config.output_path or
             'output.mp4',
             'MP4 Files (*.mp4)'
         )
@@ -440,6 +475,22 @@ class ExportDialog(QDialog):
             )
             self._progress_widget.setVisible(True)
             return
+
+        # The field is filled in now, so Export is one click from
+        # overwriting the last render. The Browse dialog asks; this
+        # path did not.
+        import os
+        if os.path.exists(path):
+            from PySide6.QtWidgets import QMessageBox
+            answer = QMessageBox.question(
+                self, 'Overwrite?',
+                f'{os.path.basename(path)} already exists.\n\n'
+                f'Replace it?',
+                QMessageBox.StandardButton.Yes |
+                QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
 
         # build config from UI
         config = self._build_config(path)
@@ -467,11 +518,9 @@ class ExportDialog(QDialog):
                        output_path: str
                        ) -> ExportConfig:
         """Read UI fields → ExportConfig."""
-        # resolution
-        res_label = self._res_combo.currentText()
-        w, h      = RESOLUTION_PRESETS.get(
-            res_label, (1920, 1080)
-        )
+        # resolution — Custom carries no data of its own
+        w, h = (self._res_combo.currentData()
+                or (self._w_spin.value(), self._h_spin.value()))
 
         # quality
         q_label = self._quality_combo.currentText()
@@ -499,6 +548,11 @@ class ExportDialog(QDialog):
             preset        = preset,
             encoder       = encoder,
             audio_bitrate = bitrate,
+            # carried from the sequence; rebuilding the config from
+            # the dialog alone dropped them back to the defaults
+            fps           = self._config.fps,
+            sample_rate   = self._config.sample_rate,
+            channels      = self._config.channels,
             start_frame   = 0,
             end_frame     = -1,
         )

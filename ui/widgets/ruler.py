@@ -103,15 +103,15 @@ class Ruler(QWidget):
         painter.setPen(QPen(self.COLOR_BORDER, 1))
         painter.drawLine(0, h - 1, w, h - 1)
 
-        if self.app_state.total_frames <= 0:
+        # --- choose tick interval based on zoom ---
+        # we want roughly one label every 80px. The scale is absolute,
+        # so it comes straight from app_state rather than being
+        # derived from the project length — an empty timeline still
+        # gets a ruler, and adding a clip no longer respaces it.
+        px_per_frame = self.app_state.px_per_frame
+        if px_per_frame <= 0:
             painter.end()
             return
-
-        # --- choose tick interval based on zoom ---
-        # we want roughly one label every 80px
-        total   = self.app_state.total_frames
-        visible = self.app_state.visible_range * total
-        px_per_frame = w / visible if visible > 0 else 1.0
 
         # candidate intervals in frames
         candidates = [
@@ -128,11 +128,10 @@ class Ruler(QWidget):
         minor = max(1, interval // 5)
 
         # --- draw ticks ---
-        start_frame = int(
-            self.app_state.view_start * total
-        )
+        start_frame = int(self.app_state.scroll_frame)
         end_frame   = int(
-            self.app_state.view_end * total
+            self.app_state.scroll_frame +
+            self.app_state.visible_frames
         ) + interval
 
         # snap start to interval boundary
@@ -143,7 +142,7 @@ class Ruler(QWidget):
 
         for frame in range(start_frame,
                            end_frame + 1, minor):
-            if frame < 0 or frame > total:
+            if frame < 0:
                 continue
 
             px = self.app_state.frame_to_pixel(

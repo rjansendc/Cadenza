@@ -38,13 +38,13 @@ STYLE = """
     QPushButton#ok:hover { background: #5aade0; }
 """
 
+from ui.constants import FRAME_SIZES
+
+# the shared sizes, with Custom last so the index maths below still
+# treats the final row as the custom one
 RESOLUTIONS = [
-    ("1920 × 1080  (1080p HD)",  1920, 1080),
-    ("3840 × 2160  (4K UHD)",    3840, 2160),
-    ("1280 × 720   (720p HD)",   1280,  720),
-    ("720 × 480    (480p SD)",    720,  480),
-    ("Custom",                      0,    0),
-]
+    (label, w, h) for label, w, h in FRAME_SIZES
+] + [("Custom", 0, 0)]
 
 FRAME_RATES = [
     ("23.976",  23.976),

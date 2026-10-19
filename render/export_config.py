@@ -18,12 +18,14 @@ import json
 # Option sets — used by the dialog dropdowns
 # =========================================================
 
-RESOLUTION_PRESETS = {
-    '1920 x 1080 (HD)':  (1920, 1080),
-    '1280 x 720 (720p)': (1280, 720),
-    '3840 x 2160 (4K)':  (3840, 2160),
-    '1080 x 1920 (Vertical HD)': (1080, 1920),
-}
+def _frame_sizes():
+    """The sizes both dialogs offer, from the one list that defines
+    them. Kept importable without Qt — ui.constants pulls in none."""
+    from ui.constants import FRAME_SIZES
+    return {label.strip(): (w, h) for label, w, h in FRAME_SIZES}
+
+
+RESOLUTION_PRESETS = _frame_sizes()
 
 QUALITY_PRESETS = {
     'High (CRF 18)':   18,
@@ -50,6 +52,56 @@ AUDIO_BITRATE_OPTIONS = {
     '192 kbps': '192k',
     '128 kbps': '128k',
 }
+
+
+ILLEGAL_IN_FILENAMES = '<>:"/\\|?*'
+
+
+def safe_filename(name: str) -> str:
+    """A sequence name turned into something Windows will accept."""
+    cleaned = ''.join(
+        ' ' if ch in ILLEGAL_IN_FILENAMES else ch
+        for ch in (name or '')
+    )
+    cleaned = ' '.join(cleaned.split()).strip(' .')
+    return cleaned or 'Untitled'
+
+
+def suggest_output_path(project=None, sequence=None,
+                        last_dir: str = '') -> str:
+    """
+    Where an export should go before the user says otherwise.
+
+    In order: the file this project was exported to last (as long as
+    its folder is still there), then the sequence's own name in the
+    folder last exported to, then beside the project file.
+
+    Premiere names the file after the sequence; the field here started
+    empty and Browse proposed 'output.mp4' in whatever directory the
+    app happened to be launched from.
+    """
+    import os
+
+    remembered = getattr(project, 'export_path', '') or ''
+    if remembered and os.path.isdir(os.path.dirname(remembered)):
+        return remembered
+
+    name = None
+    if sequence is not None:
+        name = getattr(sequence, 'name', None)
+    if not name and project is not None:
+        name = getattr(project, 'name', None)
+    filename = f'{safe_filename(name)}.mp4'
+
+    folder = last_dir if last_dir and os.path.isdir(last_dir) else ''
+    if not folder and project is not None:
+        project_path = getattr(project, 'project_path', '') or ''
+        if project_path:
+            beside = os.path.dirname(project_path)
+            if os.path.isdir(beside):
+                folder = beside
+
+    return os.path.join(folder, filename) if folder else filename
 
 
 @dataclass

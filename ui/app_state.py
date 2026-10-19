@@ -30,16 +30,24 @@ class AppState(QObject):
         self._selected_clip_ids: List[str] = []
         self._primary_clip_id:   str       = None
 
-        # --- timeline zoom (normalized 0.0 to 1.0) ---
-        self._view_start: float = 0.0
-        self._view_end:   float = 1.0
+        # --- timeline scale ---
+        # Absolute: pixels per frame. Nothing about the content changes
+        # it, so dropping, stretching or deleting a clip leaves the
+        # ruler and every other clip exactly where they were.
+        # None means "not zoomed yet" — the span then stays at
+        # DEFAULT_VISIBLE_FRAMES however wide the window is.
+        self._px_per_frame: float = None
+        self._scroll_frame: float = 0.0    # leftmost visible frame
+        self._view_width:   float = 1000.0 # canvas width, kept in sync
 
         # --- tools ---
-        self._active_tool: str = 'select'  
+        self._active_tool: str = 'select'
         # tools: 'select', 'razor', 'trim'
 
         # --- total project duration ---
-        self.total_frames: int = 0
+        # The content extent. It sets how far the timeline scrolls; it
+        # no longer has any say in the scale.
+        self._total_frames: int = 0
 
     # --- playhead ---
 
@@ -97,61 +105,152 @@ class AppState(QObject):
     def is_selected(self, clip_id: str) -> bool:
         return clip_id in self._selected_clip_ids
 
-    # --- zoom ---
+    # --- content extent ---
+
+    @property
+    def total_frames(self) -> int:
+        """Frame the last clip ends on. Sets the scroll range only."""
+        return self._total_frames
+
+    @total_frames.setter
+    def total_frames(self, frames: int):
+        frames = max(0, int(frames))
+        if frames == self._total_frames:
+            return
+        self._total_frames = frames
+        # The scroll range moved, so the zoom bar and ruler need a
+        # repaint. Clip geometry does not depend on this any more, but
+        # this used to be a plain attribute — changing it rescaled the
+        # whole timeline with nothing telling the widgets to re-lay out.
+        self._clamp_scroll()
+        self.zoom_changed.emit(self.view_start, self.view_end)
+
+    # --- scale ---
+
+    @property
+    def px_per_frame(self) -> float:
+        """Pixels one frame occupies. The zoom, absolutely."""
+        from ui.constants import DEFAULT_VISIBLE_FRAMES
+        if self._px_per_frame and self._px_per_frame > 0:
+            return self._px_per_frame
+        return self._view_width / DEFAULT_VISIBLE_FRAMES
+
+    @property
+    def visible_frames(self) -> float:
+        """How much time the window shows."""
+        ppf = self.px_per_frame
+        return self._view_width / ppf if ppf > 0 else 0.0
+
+    @property
+    def scroll_frames(self) -> float:
+        """
+        How far the timeline scrolls: the content plus empty room past
+        it, never less than the default span. This is what the zoom
+        bar's full width stands for.
+        """
+        from ui.constants import (DEFAULT_VISIBLE_FRAMES,
+                                   SCROLL_PAD_FRAMES)
+        return float(max(self._total_frames + SCROLL_PAD_FRAMES,
+                         DEFAULT_VISIBLE_FRAMES))
+
+    @property
+    def view_width(self) -> float:
+        return self._view_width
+
+    def set_view_width(self, width: float):
+        """
+        Tell the state how wide the timeline canvases are.
+
+        A window resize keeps the zoom and reveals more time, which is
+        what an absolute scale means. Before the first zoom there is no
+        scale to keep, so the default span holds instead.
+        """
+        width = float(width)
+        if width <= 0 or abs(width - self._view_width) < 0.5:
+            return
+        self._view_width = width
+        self._clamp_scroll()
+        self.zoom_changed.emit(self.view_start, self.view_end)
+
+    # --- zoom, as the normalized window the overview widgets want ---
 
     @property
     def view_start(self) -> float:
-        return self._view_start
+        sf = self.scroll_frames
+        return self._scroll_frame / sf if sf > 0 else 0.0
 
     @property
     def view_end(self) -> float:
-        return self._view_end
+        sf = self.scroll_frames
+        if sf <= 0:
+            return 1.0
+        return min(1.0, (self._scroll_frame + self.visible_frames) / sf)
 
     @property
     def visible_range(self) -> float:
-        return self._view_end - self._view_start
+        return self.view_end - self.view_start
 
     @property
     def zoom_level(self) -> float:
         r = self.visible_range
         return 1.0 / r if r > 0 else 1.0
 
+    @property
+    def scroll_frame(self) -> float:
+        """Leftmost visible frame."""
+        return self._scroll_frame
+
+    def _clamp_scroll(self):
+        """Keep the window inside the scrollable range."""
+        limit = max(0.0, self.scroll_frames - self.visible_frames)
+        self._scroll_frame = max(0.0, min(self._scroll_frame, limit))
+
+    def _apply_scale(self, px_per_frame: float, scroll_frame: float):
+        """Set zoom and scroll together, clamped, and emit once."""
+        from ui.constants import MIN_VISIBLE_FRAMES
+        w  = self._view_width
+        sf = self.scroll_frames
+        # fully zoomed out shows the whole scroll range; fully in,
+        # MIN_VISIBLE_FRAMES across the window
+        lo = w / sf if sf > 0 else px_per_frame
+        hi = w / MIN_VISIBLE_FRAMES
+        new_ppf = max(lo, min(float(px_per_frame), hi))
+
+        old = (self._px_per_frame, self._scroll_frame)
+        self._px_per_frame = new_ppf
+        self._scroll_frame = scroll_frame
+        self._clamp_scroll()
+        if (self._px_per_frame, self._scroll_frame) != old:
+            self.zoom_changed.emit(self.view_start, self.view_end)
+
     def set_view(self, start: float, end: float):
-        """Set zoom bar position directly — clamp and emit."""
+        """Set the visible window as a fraction of the scroll range."""
+        from ui.constants import MIN_VISIBLE_FRAMES
+        sf    = self.scroll_frames
         start = max(0.0, min(start, 1.0))
         end   = max(0.0, min(end,   1.0))
-        # enforce minimum visible range (max zoom limit)
-        MIN_RANGE = 0.005
-        if end - start < MIN_RANGE:
-            # keep center fixed, expand to minimum
-            center = (start + end) / 2
-            start  = center - MIN_RANGE / 2
-            end    = center + MIN_RANGE / 2
-            start  = max(0.0, start)
-            end    = min(1.0, end)
-        if (start != self._view_start or 
-                end != self._view_end):
-            self._view_start = start
-            self._view_end   = end
-            self.zoom_changed.emit(start, end)
+        if end <= start:
+            end = min(1.0, start + MIN_VISIBLE_FRAMES / sf)
+        visible = max(MIN_VISIBLE_FRAMES, (end - start) * sf)
+        self._apply_scale(self._view_width / visible, start * sf)
 
-    def zoom_in_at_position(self, 
+    def zoom_in_at_position(self,
                              norm_pos: float,
                              factor: float = 0.75):
         """
         Zoom in keeping norm_pos (0.0-1.0) fixed on screen.
-        Called on scroll wheel up — factor < 1.0 shrinks range.
-        norm_pos is the normalized timeline position 
-        under the mouse cursor.
+        Called on scroll wheel up — factor < 1.0 shows less time.
         """
-        r         = self.visible_range
-        new_range = max(r * factor, 0.005)
-        # keep norm_pos at same screen fraction
-        frac      = ((norm_pos - self._view_start) / r 
-                     if r > 0 else 0.5)
-        new_start = norm_pos - frac * new_range
-        new_end   = new_start + new_range
-        self.set_view(new_start, new_end)
+        from ui.constants import MIN_VISIBLE_FRAMES
+        visible = self.visible_frames
+        anchor  = norm_pos * self.scroll_frames
+        # where the anchor sits across the window right now
+        frac = ((anchor - self._scroll_frame) / visible
+                if visible > 0 else 0.5)
+        frac = max(0.0, min(frac, 1.0))
+        new_visible = max(MIN_VISIBLE_FRAMES, visible * factor)
+        self._apply_scale(self._view_width / new_visible,
+                          anchor - frac * new_visible)
 
     def zoom_out_at_position(self,
                               norm_pos: float,
@@ -160,62 +259,73 @@ class AppState(QObject):
 
     def pan_by(self, delta_norm: float):
         """Pan timeline by a normalized delta."""
-        new_start = self._view_start + delta_norm
-        new_end   = self._view_end   + delta_norm
-        # clamp without changing range
-        if new_start < 0.0:
-            new_end   -= new_start
-            new_start  = 0.0
-        if new_end > 1.0:
-            new_start -= (new_end - 1.0)
-            new_end    = 1.0
-        self.set_view(new_start, new_end)
+        self._apply_scale(self.px_per_frame,
+                          self._scroll_frame +
+                          delta_norm * self.scroll_frames)
+
+    def zoom_to_fit(self, first_frame: int, last_frame: int,
+                    margin: float = 0.05):
+        """Fit a frame range to the window — only ever on request."""
+        from ui.constants import MIN_VISIBLE_FRAMES
+        span = max(1.0, float(last_frame - first_frame))
+        pad  = span * margin
+        visible = max(MIN_VISIBLE_FRAMES, span + pad * 2)
+        self._apply_scale(self._view_width / visible,
+                          first_frame - pad)
 
     # --- frame/pixel conversion ---
 
     def frame_to_norm(self, frame: int) -> float:
-        """Convert frame number to normalized 0.0-1.0 position."""
-        if self.total_frames <= 0:
-            return 0.0
-        return frame / self.total_frames
+        """Convert frame number to normalized scroll-range position."""
+        sf = self.scroll_frames
+        return frame / sf if sf > 0 else 0.0
 
     def norm_to_frame(self, norm: float) -> int:
-        """Convert normalized position to frame number."""
-        return int(norm * self.total_frames)
+        """Convert normalized scroll-range position to frame number."""
+        return int(round(norm * self.scroll_frames))
 
-    def pixel_to_norm(self, 
-                       pixel: float, 
+    def pixel_to_norm(self,
+                       pixel: float,
                        view_width: float) -> float:
         """
         Convert a pixel x position in the timeline view
         to a normalized timeline position.
         """
-        frac = pixel / view_width if view_width > 0 else 0.0
-        return self._view_start + frac * self.visible_range
+        return self.frame_to_norm(
+            self.pixel_to_frame(pixel, view_width))
 
-    def norm_to_pixel(self, 
-                       norm: float, 
+    def norm_to_pixel(self,
+                       norm: float,
                        view_width: float) -> float:
         """Convert normalized position to pixel x in timeline."""
-        frac = ((norm - self._view_start) / self.visible_range
-                if self.visible_range > 0 else 0.0)
-        return frac * view_width
+        return self.frame_to_pixel(
+            norm * self.scroll_frames, view_width)
 
-    def frame_to_pixel(self, 
-                        frame: int, 
+    def frame_to_pixel(self,
+                        frame: int,
                         view_width: float) -> float:
-        """Direct frame → pixel conversion."""
-        return self.norm_to_pixel(
-            self.frame_to_norm(frame), view_width
-        )
+        """
+        Frame → pixel x in the timeline.
 
-    def pixel_to_frame(self, 
-                        pixel: float, 
+        view_width is accepted for call compatibility and ignored: the
+        scale is absolute, so it cannot depend on how wide the window
+        happens to be.
+        """
+        return (frame - self._scroll_frame) * self.px_per_frame
+
+    def pixel_to_frame(self,
+                        pixel: float,
                         view_width: float) -> int:
-        """Direct pixel → frame conversion."""
-        return self.norm_to_frame(
-            self.pixel_to_norm(pixel, view_width)
-        )
+        """Pixel x in the timeline → frame. view_width is ignored."""
+        ppf = self.px_per_frame
+        if ppf <= 0:
+            return 0
+        return int(round(self._scroll_frame + pixel / ppf))
+
+    def frames_per_pixel(self) -> float:
+        """How many frames one pixel of drag covers."""
+        ppf = self.px_per_frame
+        return 1.0 / ppf if ppf > 0 else 0.0
 
     # --- tool ---
 

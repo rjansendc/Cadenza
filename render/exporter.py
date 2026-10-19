@@ -134,6 +134,22 @@ class ExportThread(QThread):
             a_stream.codec_context.bit_rate = self._parse_bitrate(
                 config.audio_bitrate)
 
+            # Tag the colour so a player does not have to guess.
+            # Nothing was written before, and the frames were encoded
+            # with the wrong matrix besides, so saturated colour came
+            # back shifted.
+            try:
+                import av.video.reformatter as _reformat
+                hd = config.height >= 720
+                v_stream.codec_context.colorspace = (
+                    _reformat.Colorspace.ITU709 if hd
+                    else _reformat.Colorspace.ITU601)
+                v_stream.codec_context.color_primaries = 1 if hd else 6
+                v_stream.codec_context.color_trc = 1 if hd else 6
+                v_stream.codec_context.color_range = 1   # limited/TV
+            except Exception as exc:
+                print(f'[Export] colour metadata not set: {exc}')
+
             # Explicit time bases for accurate A/V sync
             # Video: 1 unit = 1 frame
             v_stream.codec_context.time_base = Fraction(1, int(round(fps_float)))
@@ -263,17 +279,37 @@ class ExportThread(QThread):
 
     def _get_video_frame(self, frame, config,
                           keep_on_gpu: bool = False):
+        # The sequence has to come along: the compositor reads the
+        # transitions and the track visibility off it. Without it,
+        # cross dissolves rendered as hard cuts and hidden tracks were
+        # exported anyway — the preview and the file disagreed.
         tensor = self.compositor.composite_frame(
-            self.clips, frame, keep_on_gpu=keep_on_gpu)
+            self.clips, frame, sequence=self.sequence,
+            keep_on_gpu=keep_on_gpu)
         seq_w = self.sequence.settings.width
         seq_h = self.sequence.settings.height
         if config.width != seq_w or config.height != seq_h:
+            import torch
             import torch.nn.functional as F
             t = (tensor.float().permute(2,0,1)
                        .unsqueeze(0).div(255.0))
+            # Fit inside the output and pad, rather than stretching to
+            # it: exporting a portrait sequence at 1920x1080 used to
+            # squash the picture sideways instead of pillarboxing it.
+            scale = min(config.width / seq_w, config.height / seq_h)
+            new_w = max(1, int(round(seq_w * scale)))
+            new_h = max(1, int(round(seq_h * scale)))
             t = F.interpolate(
-                t, size=(config.height, config.width),
+                t, size=(new_h, new_w),
                 mode='bilinear', align_corners=False)
+            if (new_w, new_h) != (config.width, config.height):
+                canvas = torch.zeros(
+                    1, 3, config.height, config.width,
+                    dtype=t.dtype, device=t.device)
+                x = (config.width  - new_w) // 2
+                y = (config.height - new_h) // 2
+                canvas[0, :, y:y + new_h, x:x + new_w] = t[0]
+                t = canvas
             tensor = (t.squeeze(0).permute(1,2,0)
                        .mul(255).byte())
         return tensor

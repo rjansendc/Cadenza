@@ -28,13 +28,18 @@ def supported(frame) -> bool:
         return False
 
 
-def frame_to_rgb_tensor(frame, device: str = 'cuda') -> torch.Tensor:
+def frame_to_rgb_tensor(frame, device=None) -> torch.Tensor:
     """
-    Decode one PyAV frame to an RGB uint8 tensor [H, W, 3] on `device`.
+    Decode one PyAV frame to an RGB uint8 tensor [H, W, 3] on `device`,
+    the best device available when not given.
 
     Falls back to PyAV's own rgb24 conversion for any format this does
     not handle (10-bit, 4:2:2, NV12 and so on).
     """
+    if device is None:
+        from gpu.device import compute_device
+        device = compute_device()
+
     if not supported(frame):
         img = frame.to_ndarray(format='rgb24')
         return torch.from_numpy(

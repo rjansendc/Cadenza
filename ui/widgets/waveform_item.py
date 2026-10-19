@@ -383,7 +383,7 @@ class WaveformItem(QGraphicsItem):
         env = self.clip.envelopes.get('volume')
         if env:
             old_val = self._env_start_val
-            env.default_value = new_val
+            self.clip.set_volume(new_val)
             from core.undo import undo_stack, SetVolumeCommand
             undo_stack.push(SetVolumeCommand(
                 self.clip, old_val, new_val

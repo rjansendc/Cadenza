@@ -290,6 +290,41 @@ class MoveClipCommand(UndoCommand):
         self.clip.track       = self.old_track
 
 
+class TrimClipCommand(UndoCommand):
+    """
+    One edge of one clip, dragged.
+
+    All three fields travel together because a left trim moves
+    start_frame along with in_point — the clip's position on the
+    timeline and its position in the source change as one.
+
+    The drag already moved the edge as the mouse went, so this is
+    pushed with execute=False on release.
+    """
+
+    def __init__(self, clip,
+                 old_in: int, old_out: int, old_start: int,
+                 new_in: int, new_out: int, new_start: int):
+        super().__init__("Trim Clip")
+        self.clip      = clip
+        self.old_in    = old_in
+        self.old_out   = old_out
+        self.old_start = old_start
+        self.new_in    = new_in
+        self.new_out   = new_out
+        self.new_start = new_start
+
+    def redo(self):
+        self.clip.in_point    = self.new_in
+        self.clip.out_point   = self.new_out
+        self.clip.start_frame = self.new_start
+
+    def undo(self):
+        self.clip.in_point    = self.old_in
+        self.clip.out_point   = self.old_out
+        self.clip.start_frame = self.old_start
+
+
 class AddClipCommand(UndoCommand):
     def __init__(self, project, clip, timeline_add_fn,
                  timeline_remove_fn):
@@ -466,33 +501,9 @@ class RemoveKeyframeCommand(UndoCommand):
             self.effect_id, self.param, self.frame, self.old_val)
 
 
-class RazorCutCommand(UndoCommand):
-    def __init__(self, project, original_clip, left_clip,
-                 right_clip, timeline_add_fn, timeline_remove_fn):
-        super().__init__("Razor Cut")
-        self.project            = project
-        self.original_clip      = original_clip
-        self.left_clip          = left_clip
-        self.right_clip         = right_clip
-        self.timeline_add_fn    = timeline_add_fn
-        self.timeline_remove_fn = timeline_remove_fn
-
-    def redo(self):
-        del self.project.clips[self.original_clip.id]
-        self.timeline_remove_fn(self.original_clip.id)
-        self.project.clips[self.left_clip.id]  = self.left_clip
-        self.project.clips[self.right_clip.id] = self.right_clip
-        self.timeline_add_fn(self.left_clip)
-        self.timeline_add_fn(self.right_clip)
-
-    def undo(self):
-        del self.project.clips[self.left_clip.id]
-        del self.project.clips[self.right_clip.id]
-        self.timeline_remove_fn(self.left_clip.id)
-        self.timeline_remove_fn(self.right_clip.id)
-        self.project.clips[self.original_clip.id] = self.original_clip
-        self.timeline_add_fn(self.original_clip)
-
+# An earlier RazorCutCommand stood here, shadowed by the one below
+# that timeline.py actually calls. Deleted rather than left to look
+# live.
 
 class SetEffectParamCommand(UndoCommand):
     def __init__(self, clip, effect_id: str,

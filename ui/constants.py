@@ -10,14 +10,49 @@ ZOOM_BAR_HEIGHT    = 16    # px for zoom bar
 NUM_VIDEO_TRACKS   = 3     # default — can grow dynamically
 NUM_AUDIO_TRACKS   = 3     # default — can grow dynamically
 
-# track row indices (V3=0 top, V1=2, A1=3, A3=5 bottom)
-def video_row(track_index: int) -> int:
-    """V1=index 0 → row 2 (bottom of video section)"""
-    return (NUM_VIDEO_TRACKS - 1) - track_index
+# ── Timeline scale ─────────────────────────────────────────
+# The zoom is absolute — pixels per frame — so editing never rescales
+# the ruler. A fresh sequence shows DEFAULT_VISIBLE_FRAMES of time,
+# which puts a 10 second still at about a twentieth of the width.
+#
+# The scale used to be a normalised fraction of the project length, so
+# every edit that changed that length silently rescaled the whole
+# timeline: six identical stills ended up drawn at six different
+# widths, and stretching one moved all the others.
+DEFAULT_VISIBLE_FRAMES = 5400   # ~3 minutes at 30fps
+SCROLL_PAD_FRAMES      = 900    # ~30s of empty room past the last clip
+MIN_VISIBLE_FRAMES     = 12     # how far in the zoom may go
 
-def audio_row(track_index: int) -> int:
-    """A1=index 0 → row 3 (top of audio section)"""
-    return NUM_VIDEO_TRACKS + track_index
+# Frame sizes offered in the sequence and export dialogs. One list,
+# so the two cannot drift: export knew about portrait while the
+# sequence dialog did not, so a vertical sequence had to be typed in
+# by hand even though export offered it as a preset.
+FRAME_SIZES = [
+    ('1920 x 1080  (1080p HD)',    1920, 1080),
+    ('3840 x 2160  (4K UHD)',      3840, 2160),
+    ('1280 x 720   (720p HD)',     1280,  720),
+    ('720 x 480    (480p SD)',      720,  480),
+    ('1080 x 1920  (Vertical HD)', 1080, 1920),
+    ('2160 x 3840  (Vertical 4K)', 2160, 3840),
+]
+
+# How long a still runs when imported. Premiere keeps this in
+# Preferences > Timeline > Still image default duration.
+STILL_IMAGE_SECONDS    = 10.0
+
+# track row indices (V3=0 top, V1=2, A1=3, A3=5 bottom).
+# n_video defaults to the constant for callers with no sequence to
+# hand, but a sequence that has had tracks added must pass its own
+# count — otherwise every row below V3 is computed one short.
+def video_row(track_index: int, n_video: int = None) -> int:
+    """V1=index 0 → the bottom row of the video section"""
+    nv = n_video if n_video is not None else NUM_VIDEO_TRACKS
+    return (nv - 1) - track_index
+
+def audio_row(track_index: int, n_video: int = None) -> int:
+    """A1=index 0 → the first row below the video section"""
+    nv = n_video if n_video is not None else NUM_VIDEO_TRACKS
+    return nv + track_index
 
 def row_to_y(row: int) -> float:
     return float(row * TRACK_HEIGHT)

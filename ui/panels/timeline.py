@@ -452,8 +452,12 @@ class TimelinePanel(QWidget):
         Reload all clips from project.
         Also rebuilds track rows if sequence changed.
         """
-        # clear all existing rows
+        # clear all existing rows. Detach first: the canvas is still
+        # subscribed to app_state, and a signal arriving between the
+        # scene being emptied and the row being collected reaches
+        # objects that no longer exist.
         for row in list(self._rows.values()):
+            row.canvas.detach()
             row.canvas._clip_items.clear()
             row.canvas._waveform_items.clear()
             row.canvas._scene.clear()
@@ -471,17 +475,14 @@ class TimelinePanel(QWidget):
             self.add_clip(clip)
 
          
-        # update total_frames to match actual clip extent
+        # follow the content extent, which sets how far the timeline
+        # scrolls. The zoom is absolute and is left alone: deleting
+        # clips used to yank the view back to fully zoomed out.
         if self.project.clips:
-            max_end = max(
+            self.app_state.total_frames = max(
                 c.start_frame + c.duration
                 for c in self.project.clips.values()
             )
-            old_total = self.app_state.total_frames
-            self.app_state.total_frames = max_end
-            # If total shrank significantly, reset view
-            if max_end < old_total * 0.9:
-                self.app_state.set_view(0.0, 1.0)
 
         # a new row count can add or remove the scrollbar, which
         # changes how wide the canvases are
@@ -719,16 +720,10 @@ class TimelinePanel(QWidget):
                 update_playback_fn=main._update_playback_clips,
                 app_state=self.app_state,
             )
-            # Push without re-executing (split_clip already ran)
-            undo_stack._stack = undo_stack._stack[
-                :undo_stack._index + 1
-            ]
-            if len(undo_stack._stack) >= undo_stack._max:
-                undo_stack._stack.pop(0)
-            else:
-                undo_stack._index += 1
-            undo_stack._stack.append(cmd)
-            undo_stack.changed.emit()
+            # split_clip already ran, so record it without redoing
+            # it. This used to reach into the stack's internals and
+            # reimplement push by hand.
+            undo_stack.push(cmd, execute=False)
 
             # update geometry of left halves
             for row in self._rows.values():

@@ -54,8 +54,16 @@ def load_project(filepath: str) -> 'Project':
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
+    # A version we cannot read should say so, not raise TypeError on
+    # the comparison — which is what a '1.0.0' string used to do.
     version = data.get('version', 1)
-    if version > PROJECT_VERSION:
+    try:
+        too_new = int(version) > PROJECT_VERSION
+    except (TypeError, ValueError):
+        raise ValueError(
+            f'Unrecognised project version {version!r}'
+        )
+    if too_new:
         raise ValueError(
             f'Project version {version} not supported'
         )
@@ -67,10 +75,23 @@ def load_project(filepath: str) -> 'Project':
 
 def _serialize_project(project: 'Project') -> dict:
     seq = project.active_sequence
+    from core.version import __version__
     return {
         'version':   PROJECT_VERSION,
+        # which build wrote this file — informational, so an old
+        # reader that does not know the key simply ignores it
+        'app_version': __version__,
         'name':      project.name,
+        # 'sequence' is the open one, kept so an older build can still
+        # read the file; 'sequences' is all of them. Saving only the
+        # active one quietly dropped the rest.
         'sequence':  _serialize_sequence(seq) if seq else None,
+        'sequences': [
+            _serialize_sequence(s)
+            for s in project.sequences.values()
+        ],
+        'active_sequence_id': project.active_sequence_id,
+        'export_path': project.export_path,
         'clips':     [
             _serialize_clip(c)
             for c in project.clips.values()
@@ -206,11 +227,23 @@ def _deserialize_project(data: dict,
     project = Project()
     project.name     = data.get('name', 'Untitled')
     project.project_path = filepath
+    project.export_path  = data.get('export_path')
     project.is_dirty = False
 
-    # ── sequence ─────────────────────────────────────
-    seq_data = data.get('sequence')
-    if seq_data:
+    # ── sequences ────────────────────────────────────
+    # Files written before this held a single 'sequence'.
+    seq_list = data.get('sequences')
+    if not seq_list:
+        single = data.get('sequence')
+        seq_list = [single] if single else []
+    if any(seq_list):
+        # Project() built a default sequence; the file's own replace it
+        # rather than sitting alongside as an empty extra.
+        project.sequences.clear()
+        project.active_sequence_id = None
+    for seq_data in seq_list:
+        if not seq_data:
+            continue
         settings_data = seq_data.get('settings', {})
         settings = SequenceSettings(
             width=settings_data.get('width',    1920),
@@ -258,8 +291,14 @@ def _deserialize_project(data: dict,
             for tr in seq_data.get('transitions', [])
         ]
 
-        project.sequences = {seq.id: seq}
-        project.active_sequence_id = seq.id
+        project.sequences[seq.id] = seq
+
+    # the one that was open, else the first we read
+    wanted = data.get('active_sequence_id')
+    if wanted and wanted in project.sequences:
+        project.active_sequence_id = wanted
+    elif project.sequences:
+        project.active_sequence_id = next(iter(project.sequences))
 
     # ── clips ─────────────────────────────────────────
     for clip_data in data.get('clips', []):
