@@ -443,7 +443,12 @@ class MainWindow(QMainWindow):
     def _build_tool_bar(self):
         tb = QToolBar('Tools', self)
         tb.setMovable(False)
-        tb.setIconSize(QSize(24, 24))
+        # The icons carry 32px and larger, so this draws from a bigger
+        # bitmap rather than stretching. The toolbar sizes itself to
+        # the icon, so this is the only number to change here — unlike
+        # the transport strip, where the button and the strip have to
+        # grow with it.
+        tb.setIconSize(QSize(32, 32))
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
 
         # tool buttons
@@ -546,21 +551,27 @@ class MainWindow(QMainWindow):
         preview_vbox.addWidget(self.preview)
 
         # Transport strip
+        # The icons are multi-resolution .ico files carrying 32px and
+        # larger, so the buttons draw from a bigger bitmap rather than
+        # stretching a 16px one. The strip, button and icon sizes move
+        # together: 24px of icon needs a 32px button to keep its hover
+        # square clear of the art, and the strip has to hold that plus
+        # its margins.
         transport = QWidget()
-        transport.setFixedHeight(32)
+        transport.setFixedHeight(38)
         transport.setStyleSheet(
             'background: #1a1a1a; border-top: 1px solid #333;'
         )
         t_layout = QHBoxLayout(transport)
-        t_layout.setContentsMargins(4, 2, 4, 2)
+        t_layout.setContentsMargins(4, 3, 4, 3)
         t_layout.setSpacing(2)
         t_layout.addStretch()  # left stretch to center buttons
 
         def _tbtn(icon_name, tip, shortcut=None):
             btn = QToolButton()
             btn.setIcon(_icon(icon_name))
-            btn.setIconSize(QSize(16, 16))
-            btn.setFixedSize(24, 24)
+            btn.setIconSize(QSize(24, 24))
+            btn.setFixedSize(32, 32)
             btn.setToolTip(tip)
             btn.setStyleSheet(
                 'QToolButton { background: transparent; border: none; }'

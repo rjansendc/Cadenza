@@ -41,15 +41,7 @@ class Ruler(QWidget):
 
         # connect to zoom/playhead changes → repaint
         # use named methods so we can disconnect cleanly
-        self.app_state.zoom_changed.connect(
-            self._on_change
-        )
-        self.app_state.playhead_changed.connect(
-            self._on_change
-        )
-        self.app_state.marks_changed.connect(
-            self._on_change
-        )
+        self._connect_signals()
 
     def _on_change(self, *_):
         if not self.isVisible():
@@ -58,6 +50,19 @@ class Ruler(QWidget):
             self.update()
         except RuntimeError:
             pass
+
+    def _connect_signals(self):
+        """
+        Start following the playhead, the zoom and the in/out points.
+
+        Disconnects first, so this can be called again safely —
+        showEvent fires whenever the widget comes back, and Qt would
+        otherwise stack a second connection and repaint twice.
+        """
+        self._disconnect_signals()
+        self.app_state.zoom_changed.connect(self._on_change)
+        self.app_state.playhead_changed.connect(self._on_change)
+        self.app_state.marks_changed.connect(self._on_change)
 
     def _disconnect_signals(self):
         """Safely disconnect — swallow both exceptions and RuntimeWarnings."""
@@ -82,6 +87,21 @@ class Ruler(QWidget):
                 )
             except Exception:
                 pass
+
+    def showEvent(self, event):
+        """
+        Pick the signals back up.
+
+        hideEvent drops them, and nothing restored them — so the
+        first time the ruler was hidden, by a minimize, a collapsed
+        splitter or any layout change, it stopped following the
+        playhead for the rest of the session. The line through the
+        tracks kept moving while the ruler's marker stayed where it
+        was, and only caught up when something else happened to
+        repaint it. Present since 1.0.
+        """
+        self._connect_signals()
+        super().showEvent(event)
 
     def hideEvent(self, event):
         self._disconnect_signals()
@@ -241,20 +261,23 @@ class Ruler(QWidget):
                 int(ph_px), h
             )
             # playhead triangle
+            #
+            # The base runs x-5 to x+6, not x-5 to x+5: a polygon's
+            # right edge is exclusive, so the narrower one filled the
+            # columns x-5 to x+4 and sat half a pixel left of the
+            # line. Kept as plain integers and left unantialiased,
+            # like everything else in this paint — the ruler draws
+            # with the hint off throughout.
             painter.setBrush(self.COLOR_PLAYHEAD)
             painter.setPen(Qt.PenStyle.NoPen)
-            x = int(ph_px)
-            points = [
-                (x - 5, 0),
-                (x + 5, 0),
-                (x,     10),
-            ]
             from PySide6.QtGui import QPolygon
             from PySide6.QtCore import QPoint
-            poly = QPolygon([
-                QPoint(p[0], p[1]) for p in points
-            ])
-            painter.drawPolygon(poly)
+            x = int(ph_px)
+            painter.drawPolygon(QPolygon([
+                QPoint(x - 5, 0),
+                QPoint(x + 6, 0),
+                QPoint(x,    10),
+            ]))
 
         painter.end()
 

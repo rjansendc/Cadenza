@@ -331,3 +331,158 @@ def test_the_span_reaches_the_export_dialog(window, monkeypatch, tmp_path):
     if window._export_dialog:
         window._export_dialog.deleteLater()
         window._export_dialog = None
+
+
+# ── the playhead marker sits on its line ──────────────────────
+
+def test_the_playhead_triangle_is_centered_on_its_line(qapp):
+    """
+    It sat half a pixel left, which reads as the arrowhead being off
+    to one side.
+
+    An integer polygon from x-5 to x+5 fills the columns x-5 to x+4 —
+    the right edge is exclusive — so its center landed on the line's
+    left edge rather than the middle of its pixel column.
+    """
+    from PySide6.QtGui import QColor
+    from ui.widgets.ruler import Ruler
+
+    state = AppState()
+    state.set_view_width(600.0)
+    state.total_frames = 1200
+    state.zoom_to_fit(0, 1200)
+    ruler = Ruler(state)
+    ruler.resize(600, 28)
+    ruler.content_width = 600
+    ruler.show()
+
+    mark = Ruler.COLOR_PLAYHEAD
+
+    def center_of_mass(image, y):
+        """Where the yellow sits on this row, weighted by how yellow
+        it is — so an antialiased edge counts for part of a pixel."""
+        weighted, total = 0.0, 0.0
+        for x in range(600):
+            colour = image.pixelColor(x, y)
+            if (abs(colour.red() - mark.red()) < 60
+                    and abs(colour.green() - mark.green()) < 60
+                    and colour.blue() < 110):
+                weight = (colour.red() + colour.green()) / 2.0
+                weighted += x * weight
+                total += weight
+        return None if total == 0 else weighted / total
+
+    try:
+        for frame in (300, 600, 601, 900):
+            state.playhead_frame = frame
+            QApplication.processEvents()
+            image = ruler.grab().toImage()
+            triangle = center_of_mass(image, 2)    # near the base
+            line     = center_of_mass(image, 20)   # below the triangle
+            assert triangle is not None, frame
+            assert line is not None, frame
+            assert abs(triangle - line) < 0.25, (frame, triangle, line)
+    finally:
+        ruler.hide()
+        ruler.deleteLater()
+
+
+# ── the ruler keeps following the playhead ────────────────────
+
+def ruler_with_counter(qapp):
+    """A ruler that records the frame at each repaint."""
+    from ui.widgets.ruler import Ruler
+    painted = []
+    original = Ruler.paintEvent
+
+    def counting(self, event):
+        painted.append(self.app_state.playhead_frame)
+        return original(self, event)
+
+    Ruler.paintEvent = counting
+    state = AppState()
+    state.set_view_width(600.0)
+    state.total_frames = 1200
+    state.zoom_to_fit(0, 1200)
+    ruler = Ruler(state)
+    ruler.resize(600, 28)
+    ruler.content_width = 600
+    ruler.show()
+    QApplication.processEvents()
+    return ruler, state, painted, original
+
+
+def drive(state, painted, frames=(200, 400, 600)):
+    painted.clear()
+    for frame in frames:
+        state.playhead_frame = frame
+        QApplication.processEvents()
+    return list(painted)
+
+
+def test_the_ruler_still_follows_after_being_hidden(qapp):
+    """
+    hideEvent drops the signal connections and nothing restored them,
+    so the first time the ruler was hidden — a minimize, a collapsed
+    splitter, any layout change — it stopped following the playhead
+    for the rest of the session. The line through the tracks kept
+    moving while the ruler's marker stayed put, catching up only when
+    something else happened to repaint it. Present since 1.0.
+    """
+    from ui.widgets.ruler import Ruler
+    ruler, state, painted, original = ruler_with_counter(qapp)
+    try:
+        assert drive(state, painted) == [200, 400, 600], 'fresh ruler'
+        ruler.hide()
+        QApplication.processEvents()
+        ruler.show()
+        QApplication.processEvents()
+        assert drive(state, painted) == [200, 400, 600], 'after hide/show'
+    finally:
+        Ruler.paintEvent = original
+        ruler.hide()
+        ruler.deleteLater()
+
+
+def test_showing_repeatedly_does_not_stack_connections(qapp):
+    """showEvent fires whenever the widget comes back; connecting
+    again each time would repaint once per connection."""
+    from ui.widgets.ruler import Ruler
+    ruler, state, painted, original = ruler_with_counter(qapp)
+    try:
+        for _ in range(3):
+            ruler.hide()
+            QApplication.processEvents()
+            ruler.show()
+            QApplication.processEvents()
+        assert drive(state, painted) == [200, 400, 600]
+    finally:
+        Ruler.paintEvent = original
+        ruler.hide()
+        ruler.deleteLater()
+
+
+def test_the_zoom_and_marks_are_picked_back_up_too(qapp):
+    """All three signals are dropped on hide, so all three have to
+    come back."""
+    from ui.widgets.ruler import Ruler
+    ruler, state, painted, original = ruler_with_counter(qapp)
+    try:
+        ruler.hide()
+        QApplication.processEvents()
+        ruler.show()
+        QApplication.processEvents()
+
+        painted.clear()
+        state.set_mark_in(100)
+        QApplication.processEvents()
+        assert painted, 'marks_changed did not reach the ruler'
+
+        painted.clear()
+        state.zoom_in_at_position(0.5, factor=0.5)
+        QApplication.processEvents()
+        assert painted, 'zoom_changed did not reach the ruler'
+    finally:
+        Ruler.paintEvent = original
+        ruler.hide()
+        ruler.deleteLater()

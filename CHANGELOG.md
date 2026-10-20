@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — 1.3.2
+
+### Interface
+
+- The toolbar and transport icons are drawn larger: the select and
+  razor tools at 32px, the transport arrows at 24px. The icons are
+  multi-resolution `.ico` files carrying 32px and above, so these
+  render from a bigger bitmap rather than stretching a 16px one. The
+  transport strip and its buttons grew with them, since an icon the
+  size of its button leaves the hover square cropping the art.
+- The Select tool's icon is a white arrow with a dark keyline rather
+  than a blue one, matching the cursor it actually gives you. The
+  razor's toolbar icon is the same file as its cursor, so the
+  convention already held for one tool and not the other — selecting
+  hands back the system arrow, which is white.
+- **The ruler keeps following the playhead after the window is
+  hidden.** It dropped its signal connections on `hideEvent` and
+  nothing restored them, so the first time it was hidden — a
+  minimize, a collapsed splitter, any layout change — it stopped
+  tracking for the rest of the session. Scrubbing then moved the line
+  through the tracks while the ruler's marker stayed where it was,
+  catching up only when something else happened to repaint it.
+  Present since 1.0.
+- The playhead's arrowhead sits on its line. Its base ran x-5 to x+5,
+  and a polygon's right edge is exclusive, so it filled the columns
+  x-5 to x+4 — half a pixel left of the line.
+
 ## 1.3.1 — 2026-10-20
 
 ### Audio
