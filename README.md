@@ -92,9 +92,11 @@ bash tools/package_linux_7z.sh
 bash tools/package_linux_7z.sh "/path/to/dist/Cadenza"
 ```
 
-The script prompts for the password and creates `Cadenza_Linux.7z`
-beside the build folder, encrypting both contents and filenames. It defaults
-to `dist/linux/Cadenza`; an optional second argument sets the output path.
+Set `Password=""` near the top of the script to your preferred password to
+reuse it without typing it each time. Leave it empty to be prompted instead.
+The script creates `Cadenza_Linux.7z` beside the build folder, encrypting both
+contents and filenames. It defaults to `dist/linux/Cadenza`; an optional second
+argument sets the output path.
 An existing archive must be moved or removed before running it again.
 
 ## Stack

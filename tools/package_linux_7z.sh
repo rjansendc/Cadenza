@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Package a built Linux folder; 7-Zip prompts for the password.
+# Package a built Linux folder with a saved or prompted password.
 set -euo pipefail
+
+# Set once here to reuse your archive password. Empty means prompt instead.
+Password=""
 
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "${1:-}" == --help || "$#" -gt 2 ]]; then
@@ -39,5 +42,9 @@ fi
 # rather than the absolute path to the build machine's files.
 cd -- "$(dirname -- "$bundle")"
 echo "Creating: $archive"
-"$archiver" a -t7z -mhe=on -p "$archive" -- "$(basename -- "$bundle")"
+password_option=(-p)
+if [[ -n "$Password" ]]; then
+    password_option=("-p$Password")
+fi
+"$archiver" a -t7z -mhe=on "${password_option[@]}" "$archive" -- "$(basename -- "$bundle")"
 echo "Created: $archive"
