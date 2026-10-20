@@ -6,7 +6,7 @@ that wants to say which version it is all agree. The version used to
 be a literal inside an f-string in the About handler.
 """
 
-__version__ = '1.3.1'
+__version__ = '1.3.2'
 
 APP_NAME = 'Cadenza'
 

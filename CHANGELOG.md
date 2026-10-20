@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.3.2
+## 1.3.2 — 2026-10-20
 
 ### Interface
 
