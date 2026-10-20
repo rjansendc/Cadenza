@@ -82,6 +82,21 @@ CUDA_VISIBLE_DEVICES=-1 ./Cadenza --smoke-test
 These exercise the GUI, six stills, zoom stability, project IO, preview,
 audio, bundled FFmpeg, software/GPU export, and Close Project. No sample footage is needed.
 
+### Password-protected Linux archive
+
+With 7-Zip (`7zz` or `7z`) installed, run:
+
+```bash
+bash tools/package_linux_7z.sh
+# Or package a build in another location:
+bash tools/package_linux_7z.sh "/path/to/dist/Cadenza"
+```
+
+The script prompts for the password and creates `Cadenza_Linux.7z`
+beside the build folder, encrypting both contents and filenames. It defaults
+to `dist/linux/Cadenza`; an optional second argument sets the output path.
+An existing archive must be moved or removed before running it again.
+
 ## Stack
 
 | Component | Library |
