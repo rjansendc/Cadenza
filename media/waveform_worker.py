@@ -91,6 +91,14 @@ class _WaveformQueue(QObject):
             self._pending.append(filepath)
         self._drain()
 
+    def is_running(self, filepath: str) -> bool:
+        """Is this file being read right now?"""
+        return filepath in self._workers
+
+    def is_waiting(self, filepath: str) -> bool:
+        """Asked for, but waiting for a slot."""
+        return filepath in self._pending
+
     def pause(self):
         """Stop starting new jobs — the disk belongs to playback."""
         self._paused = True
@@ -105,10 +113,26 @@ class _WaveformQueue(QObject):
 
     # ── internals ─────────────────────────────────────────────
 
+    @staticmethod
+    def _weight(filepath: str) -> int:
+        """How long this file will take to walk, roughly."""
+        try:
+            import os
+            return os.path.getsize(filepath)
+        except OSError:
+            return 0
+
     def _drain(self):
         while (not self._paused
                and len(self._workers) < self.MAX_CONCURRENT
                and self._pending):
+            # Smallest file first. The cost of a waveform is the walk
+            # across the container, so a 10 MB WAV is done in moments
+            # while a 4K movie holds a slot for as long as it takes to
+            # read. Taking them in the order they were asked for left
+            # a dropped WAV drawing nothing until the movie finished,
+            # with nothing on screen to say it was waiting its turn.
+            self._pending.sort(key=self._weight)
             filepath = self._pending.pop(0)
             worker = WaveformWorker(filepath)
             worker.progress.connect(self._on_progress)
@@ -142,6 +166,10 @@ class _WaveformQueue(QObject):
         self._workers.clear()
         self._retired = {f: w for f, w in running.items()
                          if w.isRunning()}
+        # the queue is a module-level singleton and outlives the
+        # window that closed, so leave it usable rather than paused:
+        # the work is already canceled and nothing is pending
+        self._paused = False
 
     def _on_progress(self, filepath: str, pct: int):
         for (path, _index), waiting in list(self._callbacks.items()):

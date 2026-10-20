@@ -105,6 +105,7 @@ class PlaybackEngine(QObject):
             self._compositor = Compositor(self.sequence)
 
         self._playing = True
+        self._hold_waveforms(True)
         self._last_shown = -1
         frame = self.app_state.playhead_frame
 
@@ -117,16 +118,41 @@ class PlaybackEngine(QObject):
         # start video timer
         self._timer.start(self._interval)
 
+    def _hold_waveforms(self, playing: bool):
+        """
+        Waveform decoding is disk-bound, so the drives belong to video
+        decode while playing.
+
+        Driven from here rather than from the play button, because
+        playback stops by routes that button never sees: reaching the
+        end of the timeline calls pause() straight from the tick, and
+        so does starting an export. Resuming only in the button
+        handler meant playing once to the end left the queue paused
+        for the rest of the session, and every waveform asked for
+        afterwards sat in the pending list forever — a dropped WAV
+        drew nothing at all, with no message to say why.
+        """
+        try:
+            from media.waveform_worker import waveform_queue
+            if playing:
+                waveform_queue.pause()
+            else:
+                waveform_queue.resume()
+        except Exception:
+            pass        # never let this stop playback
+
     def pause(self):
         if not self._playing:
             return
         self._playing = False
+        self._hold_waveforms(False)
         self._timer.stop()
         self._mixer.pause()
         self._output.stop()
 
     def stop(self):
         self._playing = False
+        self._hold_waveforms(False)
         self._timer.stop()
         self._mixer.pause()
         self._output.stop()

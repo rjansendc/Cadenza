@@ -268,6 +268,16 @@ def compute_peaks_all(filepath: str,
         expected_total = sum(j['expected'] for j in jobs.values())
         decoded_total  = 0
         packets        = 0
+        last_pct       = -1
+
+        # Say so as soon as the read starts. Reporting every 50
+        # packets meant a short file never reported at all — a three
+        # second WAV decodes in 36 — so the status bar went straight
+        # from the drop message to nothing, and a file that was being
+        # read looked identical to one that had been forgotten.
+        if progress_callback:
+            progress_callback(0)
+            last_pct = 0
 
         for packet in container.demux([jobs[i]['stream'] for i in todo]):
             index = of_stream.get(packet.stream.index)
@@ -287,9 +297,16 @@ def compute_peaks_all(filepath: str,
             if cancel_callback is not None and cancel_callback():
                 container.close()
                 return {}
-            if progress_callback and packets % 50 == 0:
-                progress_callback(
-                    min(90, int(decoded_total / expected_total * 90)))
+            if progress_callback:
+                # on each percent, not on a packet count: how many
+                # packets a file decodes into has nothing to do with
+                # how long it takes to read
+                pct = (min(90, int(decoded_total / expected_total * 90))
+                       if expected_total else
+                       min(90, packets // 50))
+                if pct != last_pct:
+                    last_pct = pct
+                    progress_callback(pct)
 
         container.close()
 

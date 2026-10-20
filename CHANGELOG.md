@@ -1,5 +1,137 @@
 # Changelog
 
+## 1.3.1 — 2026-10-20
+
+### Audio
+
+- Fixed waveforms never starting after playback had run once. The
+  waveform queue is held while playing, since decoding is disk-bound
+  and the drives belong to video decode — but the hold was released
+  in the play button's handler, and playback stops by routes that
+  button never sees. Reaching the end of the timeline calls pause()
+  straight from the video tick, and so does starting an export. So
+  playing once to the end left the queue paused for the rest of the
+  session: a dropped WAV reported "0V + 1A clips linked" and then
+  drew nothing, with no message to say why. The hold now lives in the
+  playback engine, which sees every stop. New in 1.3.0, where the
+  queue was introduced.
+- Shutting the queue down on exit no longer leaves it unusable. It is
+  a module-level singleton that outlives the window which closed, and
+  cancelling its work also left it permanently paused.
+- **Importing audio now starts its waveform.** Peaks were computed
+  only when a clip was placed on an audio track, so dropping a file
+  into the media bin did nothing at all — no work started and nothing
+  was said — and the wait landed later, on the edit. The read begins
+  at import, one request per file (the queue reads every audio stream
+  of a file in one pass), and the status bar reports it. By the time a
+  clip is placed the peaks are cached and draw at once. Files already
+  cached are not read again, and stills are skipped.
+- Waveforms are now computed smallest file first. The cost of a
+  waveform is the walk across its container, so a 10 MB WAV is done
+  in moments while a 4K movie holds one of the two slots for as long
+  as it takes to read the whole file. Taken in the order they were
+  asked for, a WAV dropped after a movie drew nothing until the movie
+  finished.
+- Waveform progress is reported on each percent rather than every 50
+  packets, which has nothing to do with how long a file takes to
+  read. A three second WAV decodes into 36 packets, so it reported no
+  percentage at all before jumping to the end — and 0% is now
+  reported the moment the read starts, so a file being read never
+  looks like one that has been forgotten. It also caps the updates:
+  a five minute file used to fire 281 of them.
+- The status bar says when a waveform is waiting its turn. The drop
+  message is set after the clips are drawn, so it replaced the status
+  the canvas had just put there: a file waiting behind larger ones
+  reported only "Added: a.wav → 0V + 1A clips linked" and then sat
+  unchanged, looking as though waveforms had stopped working.
+
+### Color
+
+- **Input LUT and White Balance now do something.** Both were
+  declared in the effect and drawn in the Effects panel, but
+  `apply_video` never read them: "As Shot", "Tungsten" and "Daylight"
+  all produced byte-identical output. Input LUT now converts the
+  transfer function — "Rec.709" reads the clip as Rec.709 and writes
+  sRGB, which opens the shadows, and "sRGB" is the inverse. White
+  Balance applies the correction for the light the footage was shot
+  under, with "Auto" measuring the cast from the picture itself.
+  "Daylight" is the reference the others are measured against, so it
+  corrects by nothing — it is there to return to neutral.
+- **Every Lumetri slider now has comparable authority.** At full
+  travel they ranged from 8 levels of change out of 255 to 41, so
+  most of the panel felt dead beside Exposure at 123. Measured on a
+  reference frame, before and after:
+
+  | control | was | now |
+  |---|---|---|
+  | Tint | 8.5 | 40.1 |
+  | Shadows | 12.3 | 39.9 |
+  | Highlights | 12.7 | 40.1 |
+  | Temperature | 16.7 | 39.7 |
+  | Vibrance | 19.4 | 39.9 |
+  | Whites / Blacks | 22.9 | 40.0 |
+  | Saturation | 23.8 | 40.0 |
+  | Contrast | 40.9 | 40.1 |
+
+  `tools/calibrate_lumetri.py` solves the constants, so a change to
+  any control's curve can be rebalanced rather than guessed at.
+  Exposure is left alone: it is measured in stops, and matching it to
+  the others would mean a range of about a third of a stop — half a
+  stop already moves a picture as much as a slider at full travel.
+- **Tint is a hue shift rather than a dimmer.** It moved the green
+  channel alone, and green carries 71% of the luminance, so Tint read
+  as a brightness control with a color cast. Red and blue now move
+  against green, weighted so the luminance green gives up is handed
+  back: at ±80 the picture's brightness moves by under 2 levels where
+  it used to move by 28.
+
+  Clips already graded with Tint, Highlights, Shadows, Temperature,
+  Vibrance, Whites, Blacks or Saturation will look different, since
+  those controls now do what their numbers said.
+
+### Export
+
+- **In and out points.** Export's "In / Out points" option could not
+  be selected: it was a disabled placeholder, and there was nothing
+  behind it — Cadenza had no in or out points at all, no command, no
+  keys, nothing on the ruler. The back half had been working the
+  whole time, with `ExportConfig` carrying `start_frame` and
+  `end_frame` and the exporter honoring both; nothing in the UI ever
+  set them, so every export ran the full timeline.
+
+  **I** marks in and **O** marks out at the playhead, as in Premiere,
+  with Sequence ▸ Mark In / Mark Out / Clear In and Out for finding
+  them without the keys (**Ctrl+Shift+X** clears). The ruler shows the
+  span and dims what falls outside it, so what will be exported is
+  plain without opening the dialog. The export dialog then offers the
+  option with the span's length on it, and is preselected when one is
+  marked.
+
+  Out is exclusive, like a clip's out point, so marking in and out on
+  the same frame exports one frame rather than none. One mark on its
+  own is enough: an in point alone runs to the last clip, an out
+  point alone from the start. Marking in past an existing out point
+  drops the out point rather than refusing, the same as dragging a
+  clip's left edge past its right.
+
+### Timeline and editing
+
+- **An audio clip can be linked to a video clip.** A link group needs
+  something to link, but every drop was given a fresh group id and
+  handed it to whatever it created — so a WAV dropped by itself ended
+  up in a group of one, and a group id on its own reads as "linked"
+  everywhere it is asked. After unlinking a movie, deleting its audio
+  and bringing another WAV up to the video, right-clicking the audio
+  offered Unlink while right-clicking the video offered Link: neither
+  offered what was wanted and the two could not be joined.
+
+  A single-clip drop is no longer given a group; a group emptied to
+  one member by an unlink or a delete lets that member go; and the
+  menu now asks whether the clicked clip has a partner rather than
+  whether it carries an id, so projects already holding such a group
+  read correctly. Linking fewer than two clips does nothing rather
+  than making a group of one.
+
 ## 1.3.0 — 2026-10-19
 
 ### Audio

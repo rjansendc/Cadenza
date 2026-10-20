@@ -14,7 +14,14 @@ progress at all:
     to a flat 1000 frames. A short file never got past 42%, and an
     hour-long one reported 90% within its first ninety seconds and
     sat there — which reads as a hang. It is now measured in
-    samples against the stream duration.
+    samples against the stream duration;
+
+  - and it was reported once every 50 packets, which has nothing to
+    do with how long a file takes to read. A three second WAV
+    decodes into 36 packets, so it reported nothing whatsoever: the
+    status bar went from the drop message straight to silence, and a
+    file being read looked exactly like one that had been forgotten.
+    The report now follows the percentage itself.
 """
 
 import fractions
@@ -119,3 +126,69 @@ def test_the_decode_itself_never_claims_to_be_finished(
     seen = reported(wav_without_a_frame_count)
     assert seen[-2:] == [95, 100]
     assert all(p <= 90 for p in seen[:-2])
+
+
+# ── short files report too ────────────────────────────────────
+
+@pytest.fixture(scope='module')
+def three_seconds(tmp_path_factory):
+    """Short enough to decode in fewer than 50 packets."""
+    path = str(tmp_path_factory.mktemp('media') / 'short.wav')
+    samples = (np.sin(2 * np.pi * 220 * np.arange(RATE * 3) / RATE)
+               * 0.8 * 32767).astype(np.int16)
+    with av.open(path, mode='w') as container:
+        stream = container.add_stream('pcm_s16le', rate=RATE)
+        stream.codec_context.layout = 'mono'
+        stream.codec_context.time_base = fractions.Fraction(1, RATE)
+        pts = 0
+        for i in range(0, len(samples) - CHUNK, CHUNK):
+            frame = av.AudioFrame.from_ndarray(
+                samples[i:i + CHUNK].reshape(1, -1),
+                format='s16', layout='mono')
+            frame.sample_rate = RATE
+            frame.pts = pts
+            frame.time_base = fractions.Fraction(1, RATE)
+            pts += CHUNK
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    return path
+
+
+@pytest.fixture
+def no_short_cache(three_seconds):
+    from pathlib import Path
+    for index in (0, 1):
+        cache = get_cache_path(three_seconds, index)
+        for candidate in (cache, Path(str(cache) + '.npy')):
+            Path(candidate).unlink(missing_ok=True)
+    yield
+
+
+def test_the_short_file_really_is_under_the_old_threshold(three_seconds):
+    """Guard the premise: this has to decode in fewer than the 50
+    packets the old report interval waited for."""
+    with av.open(three_seconds) as container:
+        stream = next(s for s in container.streams if s.type == 'audio')
+        packets = sum(1 for _ in container.demux([stream]))
+    assert packets < 50, packets
+
+
+def test_a_short_file_reports_progress(three_seconds, no_short_cache):
+    """It used to report nothing at all before jumping to 95."""
+    during = [p for p in reported(three_seconds) if p <= 90]
+    assert len(during) > 2, during
+
+
+def test_progress_starts_at_zero_straight_away(three_seconds,
+                                               no_short_cache):
+    """So that a file being read never looks like one forgotten."""
+    assert reported(three_seconds)[0] == 0
+
+
+def test_progress_is_not_reported_once_per_packet(
+        wav_without_a_frame_count):
+    """Following the percentage caps the updates whatever the file:
+    a five minute file used to fire 281 times."""
+    assert len(reported(wav_without_a_frame_count)) <= 95

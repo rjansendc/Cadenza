@@ -20,6 +20,8 @@ class Ruler(QWidget):
     COLOR_TEXT     = QColor('#888888')
     COLOR_PLAYHEAD = QColor('#e8e820')
     COLOR_BORDER   = QColor('#333333')
+    COLOR_MARKED   = QColor('#3a6ea5')     # the span to export
+    COLOR_OUTSIDE  = QColor(0, 0, 0, 110)  # dims what is left out
 
     def __init__(self, app_state: AppState,
                  fps: float = 29.97,
@@ -45,6 +47,9 @@ class Ruler(QWidget):
         self.app_state.playhead_changed.connect(
             self._on_change
         )
+        self.app_state.marks_changed.connect(
+            self._on_change
+        )
 
     def _on_change(self, *_):
         if not self.isVisible():
@@ -61,6 +66,12 @@ class Ruler(QWidget):
             warnings.simplefilter("ignore", RuntimeWarning)
             try:
                 self.app_state.zoom_changed.disconnect(
+                    self._on_change
+                )
+            except Exception:
+                pass
+            try:
+                self.app_state.marks_changed.disconnect(
                     self._on_change
                 )
             except Exception:
@@ -181,6 +192,41 @@ class Ruler(QWidget):
                     int(px), h - 6,
                     int(px), h - 1
                 )
+
+        # --- in / out points ---
+        # Drawn before the playhead so the playhead stays on top, and
+        # after the ticks so the dimming covers them: what is outside
+        # the span will not be exported, and that should be plain
+        # without having to open the export dialog.
+        marked = self.app_state.marked_range()
+        if marked is not None:
+            start_px = self.app_state.frame_to_pixel(
+                marked[0], self._content_width())
+            end_px = self.app_state.frame_to_pixel(
+                marked[1], self._content_width())
+            if start_px > 0:
+                painter.fillRect(0, 0, int(start_px), h,
+                                 self.COLOR_OUTSIDE)
+            if end_px < w:
+                painter.fillRect(int(end_px), 0, w - int(end_px), h,
+                                 self.COLOR_OUTSIDE)
+            # the bar across the marked span
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.COLOR_MARKED)
+            left  = max(0, int(start_px))
+            right = min(w, int(end_px))
+            if right > left:
+                painter.drawRect(left, h - 5, right - left, 4)
+            # and a bracket at each end that was actually set
+            painter.setPen(QPen(self.COLOR_MARKED, 2))
+            if self.app_state.mark_in is not None and 0 <= start_px <= w:
+                x = int(start_px)
+                painter.drawLine(x, 0, x, h - 1)
+                painter.drawLine(x, 1, x + 5, 1)
+            if self.app_state.mark_out is not None and 0 <= end_px <= w:
+                x = int(end_px)
+                painter.drawLine(x, 0, x, h - 1)
+                painter.drawLine(x - 5, 1, x, 1)
 
         # --- playhead marker ---
         ph_px = self.app_state.frame_to_pixel(

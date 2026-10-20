@@ -655,6 +655,37 @@ class ClipItem(QGraphicsRectItem):
             main.source_monitor.load_clip(self.clip)
         event.accept()
 
+    def _link_menu_choice(self, all_items, sel_ids):
+        """
+        Which of Link / Unlink the menu offers, or None for neither.
+
+        Unlink is for a clip that really is linked. A link group id on
+        its own is not a link: every drop used to be given one even
+        when it created a single clip, so a WAV dropped by itself
+        offered Unlink while the bare video beside it offered Link —
+        and neither could be linked to the other, which is what was
+        wanted. A group left with one member by an unlink or a delete
+        reads the same way, and old projects hold such groups.
+
+        all_items maps clip id to its timeline item; sel_ids is the
+        current selection.
+        """
+        mine = self.clip.link_group_id
+        if mine and any(
+                item.clip.link_group_id == mine
+                and item.clip.id != self.clip.id
+                for item in all_items.values()):
+            return 'unlink'
+
+        selected = [all_items[i].clip for i in sel_ids
+                    if i in all_items]
+        if len(selected) < 2:
+            return None                 # nothing to link it to
+        groups = {c.link_group_id for c in selected}
+        if len(groups) == 1 and None not in groups:
+            return None                 # already one group
+        return 'link'
+
     def contextMenuEvent(self, event):
         """Right-click context menu."""
         from PySide6.QtWidgets import QMenu
@@ -699,33 +730,12 @@ class ClipItem(QGraphicsRectItem):
                 all_items.update(
                     row.canvas._clip_items
                 )
-        sel_clips = [
-            all_items[i].clip
-            for i in sel_ids
-            if i in all_items
-        ]
-        # all selected clips in same link group?
-        groups = set(
-            c.link_group_id for c in sel_clips
-            if c.link_group_id
-        )
-        all_same_group = (
-            len(groups) == 1 and
-            all(c.link_group_id for c in sel_clips)
-        )
+        sel_clips = [all_items[i].clip for i in sel_ids
+                     if i in all_items]
 
-        # show Unlink if right-clicked clip is linked
-        # show Link if multiple selected and not all same group
-        # never show both
-        if self.clip.link_group_id:
-            show_unlink = True
-            show_link   = False
-        elif multi_sel and not all_same_group:
-            show_unlink = False
-            show_link   = True
-        else:
-            show_unlink = False
-            show_link   = False
+        choice      = self._link_menu_choice(all_items, sel_ids)
+        show_unlink = choice == 'unlink'
+        show_link   = choice == 'link'
 
         # Delete
         act_delete = menu.addAction('Delete')

@@ -411,7 +411,14 @@ class Project:
             )
             created.append(audio_clip)
 
-    
+        # A link group needs something to link. Every drop was given
+        # a fresh group id and handed it to whatever it created, so a
+        # WAV dropped by itself ended up in a group of one — which
+        # reads as linked everywhere it is asked: its menu offered
+        # Unlink, and it could not be linked to a video beside it.
+        if len(created) < 2:
+            for clip in created:
+                clip.link_group_id = None
 
         return created
 
@@ -439,19 +446,40 @@ class Project:
         ]
 
     def link_clips(self, clip_ids: List[str]):
-        """Link clips together into a new group."""
+        """
+        Link clips together into a new group.
+
+        Two or more, or nothing happens: a group of one is not a
+        link, and leaving one behind makes a clip claim a partner it
+        does not have.
+        """
+        present = [self.clips[cid] for cid in clip_ids
+                   if cid in self.clips]
+        if len(present) < 2:
+            return
         group_id = str(uuid.uuid4())
-        for clip_id in clip_ids:
-            clip = self.clips.get(clip_id)
-            if clip:
-                clip.link_group_id = group_id
+        for clip in present:
+            clip.link_group_id = group_id
         self.is_dirty = True
 
     def unlink_clip(self, clip_id: str):
-        """Remove ONE clip from its link group."""
+        """
+        Remove ONE clip from its link group.
+
+        If that leaves a single clip behind, it is let go too: one
+        clip is not a group, and a clip that keeps the id claims a
+        partner that is no longer there.
+        """
         clip = self.clips.get(clip_id)
-        if clip:
-            clip.link_group_id = None
+        if not clip:
+            return
+        group = clip.link_group_id
+        clip.link_group_id = None
+        if group:
+            remaining = [c for c in self.clips.values()
+                         if c.link_group_id == group]
+            if len(remaining) == 1:
+                remaining[0].link_group_id = None
         self.is_dirty = True
 
     def unlink_group(self, clip_id: str):
@@ -463,8 +491,15 @@ class Project:
 
 
     def remove_clip(self, clip_id: str):
-        self.clips.pop(clip_id, None)
+        clip = self.clips.pop(clip_id, None)
         self.is_dirty = True
+        # a group left with one member is not a link any more
+        group = getattr(clip, 'link_group_id', None)
+        if group:
+            remaining = [c for c in self.clips.values()
+                         if c.link_group_id == group]
+            if len(remaining) == 1:
+                remaining[0].link_group_id = None
 
     def get_clips_for_track(self, 
                              track: int,

@@ -313,7 +313,7 @@ def sync_clips_to_reference(
 
             search_corr = corr[lo:hi]
 
-            # Envelope peak detection: find the centre of the
+            # Envelope peak detection: find the center of the
             # correlation hill, then refine against the raw curve.
             #
             # The envelope has to be built by pooling |corr| over
@@ -334,7 +334,7 @@ def sync_clips_to_reference(
             sigma_ds = max(1.0, sample_rate / ds)  # 1s in pooled space
             env_ds   = gaussian_filter1d(pooled, sigma=sigma_ds)
             env_peak_ds = int(np.argmax(env_ds))
-            # Map back to full-res (block centre) and refine within ±1s
+            # Map back to full-res (block center) and refine within ±1s
             env_peak = env_peak_ds * ds + ds // 2
             refine_r = sample_rate  # ±1s in full-res samples
             lo_r = max(0, env_peak - refine_r)

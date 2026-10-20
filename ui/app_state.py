@@ -16,6 +16,7 @@ class AppState(QObject):
     tool_changed          = Signal(str)        # tool name
     project_changed       = Signal()           # full refresh needed
     clip_modified         = Signal(str)        # clip_id — effect/property changed
+    marks_changed         = Signal()           # in/out points moved or cleared
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,6 +26,12 @@ class AppState(QObject):
         # True while the playhead is being dragged: frames are drawn
         # from the nearest keyframe so the picture follows the mouse
         self.scrubbing: bool = False
+
+        # --- in / out points ---
+        # The span to export, in frames. None means unset, which is
+        # not the same as 0: an in point of 0 is a real choice.
+        self._mark_in:  Optional[int] = None
+        self._mark_out: Optional[int] = None
 
         # --- selection ---
         self._selected_clip_ids: List[str] = []
@@ -134,6 +141,78 @@ class AppState(QObject):
         if self._px_per_frame and self._px_per_frame > 0:
             return self._px_per_frame
         return self._view_width / DEFAULT_VISIBLE_FRAMES
+
+    # ── in / out points ─────────────────────────────────────
+
+    @property
+    def mark_in(self) -> Optional[int]:
+        return self._mark_in
+
+    @property
+    def mark_out(self) -> Optional[int]:
+        return self._mark_out
+
+    @property
+    def has_marks(self) -> bool:
+        """Is there a usable span? One mark on its own is enough: the
+        other end is the start or the end of the timeline."""
+        return self._mark_in is not None or self._mark_out is not None
+
+    def set_mark_in(self, frame: Optional[int]):
+        """
+        Mark the start of the span.
+
+        An in point past the out point would be an empty export, so
+        the out point gives way rather than the mark being refused —
+        the same as dragging a clip's left edge past its right.
+        """
+        frame = None if frame is None else max(0, int(frame))
+        if (frame is not None and self._mark_out is not None
+                and frame >= self._mark_out):
+            self._mark_out = None
+        if frame == self._mark_in:
+            return
+        self._mark_in = frame
+        self.marks_changed.emit()
+
+    def set_mark_out(self, frame: Optional[int]):
+        """Mark the end of the span. Exclusive, like a clip's
+        out_point: marking out at the playhead includes the frame
+        under it."""
+        frame = None if frame is None else max(0, int(frame))
+        if (frame is not None and self._mark_in is not None
+                and frame <= self._mark_in):
+            self._mark_in = None
+        if frame == self._mark_out:
+            return
+        self._mark_out = frame
+        self.marks_changed.emit()
+
+    def clear_marks(self):
+        if self._mark_in is None and self._mark_out is None:
+            return
+        self._mark_in = None
+        self._mark_out = None
+        self.marks_changed.emit()
+
+    def marked_range(self, total_frames: Optional[int] = None):
+        """
+        The span to export as (start, end), end exclusive, or None
+        when nothing is marked.
+
+        A single mark is honored: an in point alone runs to the end of
+        the timeline, an out point alone from its start.
+        """
+        if not self.has_marks:
+            return None
+        end_of_timeline = (self.total_frames if total_frames is None
+                           else total_frames)
+        start = 0 if self._mark_in is None else self._mark_in
+        end   = (end_of_timeline if self._mark_out is None
+                 else self._mark_out)
+        if end <= start:
+            return None
+        return (int(start), int(end))
 
     @property
     def visible_frames(self) -> float:

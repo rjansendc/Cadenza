@@ -39,6 +39,7 @@ class ExportDialog(QDialog):
     export_requested = Signal(ExportConfig)
 
     def __init__(self, default_config: ExportConfig,
+                 marked_range=None,
                  parent=None):
         super().__init__(parent)
         self.setWindowTitle('Export')
@@ -47,6 +48,10 @@ class ExportDialog(QDialog):
 
         self._config  = default_config
         self._exporting = False
+        # (start, end) from the timeline's in / out points, or None.
+        # The option was a disabled placeholder with nothing behind
+        # it: there were no in and out points to read.
+        self._marked_range = marked_range
 
         self._build_ui()
         self._populate_fields()
@@ -305,7 +310,16 @@ class ExportDialog(QDialog):
             'In / Out points'
         )
         self._full_radio.setChecked(True)
-        self._inout_radio.setEnabled(False)   # future
+        marked = self._marked_range
+        self._inout_radio.setEnabled(marked is not None)
+        if marked is not None:
+            start, end = marked
+            self._inout_radio.setText(
+                f'In / Out points  ({end - start} frames)')
+            self._inout_radio.setChecked(True)
+        else:
+            self._inout_radio.setToolTip(
+                'Mark in and out on the timeline first (I and O)')
         self._range_group.addButton(self._full_radio)
         self._range_group.addButton(self._inout_radio)
         layout.addWidget(self._full_radio)
@@ -540,6 +554,12 @@ class ExportDialog(QDialog):
             a_label, '192k'
         )
 
+        # range
+        start_frame, end_frame = 0, -1
+        if (self._marked_range is not None
+                and self._inout_radio.isChecked()):
+            start_frame, end_frame = self._marked_range
+
         return ExportConfig(
             output_path   = output_path,
             width         = w,
@@ -553,6 +573,6 @@ class ExportDialog(QDialog):
             fps           = self._config.fps,
             sample_rate   = self._config.sample_rate,
             channels      = self._config.channels,
-            start_frame   = 0,
-            end_frame     = -1,
+            start_frame   = start_frame,
+            end_frame     = end_frame,
         )

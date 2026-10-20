@@ -67,17 +67,23 @@ def no_cache(long_audio):
 
 # ── the decode can be abandoned ───────────────────────────────
 
-def test_cancel_is_asked_more_often_than_progress_is_reported(long_audio):
+def test_cancel_is_asked_on_every_packet(long_audio):
     """Why cancelling cannot ride on the progress callback: progress
-    is reported every 50 audio frames, and this four-second file
-    decodes as fewer frames than that — PyAV hands back large frames,
-    so the decode loop reports nothing at all. Overloading progress
-    meant the cancel was never seen."""
+    is capped — it is reported on each percent, so at most 91 times
+    however long the file — while a cancel has to be noticed as soon
+    as it is set. Asking only when progress is reported would make
+    the latency depend on the file's length."""
+    import av
+    with av.open(long_audio) as container:
+        stream = next(s for s in container.streams if s.type == 'audio')
+        packets = sum(1 for _ in container.demux([stream]))
+
     progress, asked = [], []
     compute_peaks(long_audio, num_peaks=200,
                   progress_callback=lambda pct: progress.append(pct),
                   cancel_callback=lambda: asked.append(1) and False)
-    assert len(asked) > len(progress)
+    assert len(asked) >= packets
+    assert len(progress) <= 95            # capped whatever the file
 
 
 def test_a_truthy_cancel_abandons_the_decode(long_audio):

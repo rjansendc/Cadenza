@@ -283,6 +283,15 @@ class MainWindow(QMainWindow):
         if tracks_added:
             message += (f' (+{tracks_added} track'
                         f'{"s" if tracks_added > 1 else ""})')
+        # Say so when its waveform has not started. This message is
+        # set after the clips are drawn, so it replaced whatever the
+        # canvas had just put there — and a file waiting behind two
+        # larger ones therefore reported nothing at all, looking as
+        # though waveforms had stopped working.
+        if a_count:
+            from media.waveform_worker import waveform_queue
+            if waveform_queue.is_waiting(item.filepath):
+                message += ' · waveform queued'
         self.status_label.setText(message)
 
         # sync to playback engine
@@ -344,6 +353,15 @@ class MainWindow(QMainWindow):
         seq_menu = mb.addMenu('Sequence')
         self._add_action(seq_menu, 'Sequence Settings...',
                          self._on_sequence_settings)
+        seq_menu.addSeparator()
+        # In / out points. The keys match Premiere, and the menu
+        # entries are here so they can be found without knowing them.
+        self._add_action(seq_menu, 'Mark In',
+                         self._on_mark_in, 'I')
+        self._add_action(seq_menu, 'Mark Out',
+                         self._on_mark_out, 'O')
+        self._add_action(seq_menu, 'Clear In and Out',
+                         self._on_clear_marks, 'Ctrl+Shift+X')
         seq_menu.addSeparator()
         self._add_action(seq_menu, 'Add Video Track',
                          self._on_add_video_track)
@@ -1116,6 +1134,43 @@ class MainWindow(QMainWindow):
                     f'Saved: {path}'
                 )
 
+    def _precompute_waveforms(self, items):
+        """
+        Start reading waveforms as soon as media is imported.
+
+        Peaks used to be computed only when a clip was placed on an
+        audio track, so dropping a file into the bin did nothing at
+        all — no work, no message — and the wait landed later, on the
+        edit. Importing is the moment to pay for it: by the time a
+        clip is placed the peaks are cached and draw at once.
+
+        One request per file. The queue reads every audio stream of a
+        file in a single pass, so asking for the first is asking for
+        all of them.
+        """
+        from media.waveform_worker import waveform_queue
+        from media.waveform import load_peaks
+        from pathlib import Path
+
+        asked = 0
+        for item in items:
+            if not getattr(item, 'has_audio', False):
+                continue
+            if load_peaks(item.filepath, 0) is not None:
+                continue                    # already on disk
+            name = Path(item.filepath).name
+
+            def progress(_filepath, pct, _name=name):
+                self.status_label.setText(f'Waveform: {_name} {pct}%')
+
+            def done(_filepath, _peaks, _name=name):
+                self.status_label.setText(f'Waveform ready: {_name}')
+
+            waveform_queue.submit(item.filepath, 0,
+                                  completed=done, progress=progress)
+            asked += 1
+        return asked
+
     def _on_import_paths(self, paths: list):
         """Import a list of file paths directly (e.g. from drag/drop)."""
         if not paths:
@@ -1125,10 +1180,12 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             recent.remember_dir(recent.MEDIA, paths[0])
+            imported = []
             for path in paths:
                 item = self.project.import_media(path)
                 self._populate_media_metadata(item)
                 self.media_bin.add_item(item)
+                imported.append(item)
             # Importing puts nothing on the timeline, so it must not
             # touch the timeline's length. This used to set it from the
             # longest source file, which moved the scale before the
@@ -1136,6 +1193,7 @@ class MainWindow(QMainWindow):
             self.timeline.refresh()
             self.status_label.setText(
                 f'Imported {len(paths)} file(s)')
+            self._precompute_waveforms(imported)
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -1163,6 +1221,7 @@ class MainWindow(QMainWindow):
 
         try:
             recent.remember_dir(recent.MEDIA, paths[0])
+            imported = []
             for path in paths:
                 item = self.project.import_media(path)
                 self.status_label.setText(
@@ -1171,6 +1230,7 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
                 self._populate_media_metadata(item)
                 self.media_bin.add_item(item)
+                imported.append(item)
 
             # Nothing has been placed yet, so the timeline's length
             # is unchanged — and with an absolute scale there is no
@@ -1179,6 +1239,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText(
                 f'Imported {len(paths)} file(s)'
             )
+            self._precompute_waveforms(imported)
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -1369,6 +1430,47 @@ class MainWindow(QMainWindow):
     # =========================================================
     # Sequence Actions
     # =========================================================
+
+    def _on_mark_in(self, **kwargs):
+        """
+        Start the export span at the playhead.
+
+        The range is what Export reads: its In / Out points option
+        was a disabled placeholder, and the exporter has honored
+        ExportConfig.start_frame and end_frame all along — nothing
+        in the UI ever set them, so every export ran the whole
+        timeline.
+        """
+        frame = self.app_state.playhead_frame
+        self.app_state.set_mark_in(frame)
+        self.status_label.setText(
+            f'Mark in at {self._timecode(frame)}')
+
+    def _on_mark_out(self, **kwargs):
+        """
+        End the export span after the playhead.
+
+        Exclusive, like a clip's out point, so the frame the playhead
+        sits on is included — marking in and out at the same frame
+        gives one frame, not none.
+        """
+        frame = self.app_state.playhead_frame + 1
+        self.app_state.set_mark_out(frame)
+        self.status_label.setText(
+            f'Mark out at {self._timecode(frame - 1)}')
+
+    def _on_clear_marks(self, **kwargs):
+        self.app_state.clear_marks()
+        self.status_label.setText('In and out points cleared')
+
+    def _timecode(self, frame: int) -> str:
+        fps = 29.97
+        seq = self.project.active_sequence
+        if seq:
+            fps = seq.settings.fps or fps
+        seconds = frame / fps
+        return (f'{int(seconds // 60):d}:{seconds % 60:06.3f} '
+                f'(frame {frame})')
 
     def _on_add_video_track(self):
         seq = self.project.active_sequence
@@ -1650,10 +1752,9 @@ class MainWindow(QMainWindow):
         if self._playback:
             self._playback.toggle()
             playing = self._playback.is_playing
-            # waveform decoding is disk-bound; leave the drives to
-            # video decode while playing
-            from media.waveform_worker import waveform_queue
-            waveform_queue.pause() if playing else waveform_queue.resume()
+            # the engine holds the waveform queue while it plays: it
+            # is the only thing that sees every stop, the end of the
+            # timeline included
             if hasattr(self, '_play_btn'):
                 self._play_btn.setIcon(
                     _icon('pause.ico') if playing
@@ -1811,8 +1912,17 @@ class MainWindow(QMainWindow):
                 self.project, seq, recent.last_dir(recent.EXPORTS)),
         )
 
+        # the span marked on the timeline, measured against the
+        # content rather than the scroll range so an in point alone
+        # runs to the last clip and not into empty timeline
+        content_end = max(
+            (c.start_frame + c.duration
+             for c in self.project.clips.values()),
+            default=0)
         self._export_dialog = ExportDialog(
-            config, parent=self
+            config,
+            marked_range=self.app_state.marked_range(content_end),
+            parent=self
         )
         self._export_dialog.export_requested.connect(
             self._start_export
