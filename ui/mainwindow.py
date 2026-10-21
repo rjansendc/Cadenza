@@ -296,6 +296,7 @@ class MainWindow(QMainWindow):
 
         # sync to playback engine
         self._update_playback_clips()
+        self._refresh_preview_after_edit()
 
 
 
@@ -1697,6 +1698,7 @@ class MainWindow(QMainWindow):
                 for c in self.project.clips.values()
             )
         self._update_playback_clips()
+        self._refresh_preview_after_edit()
         self._update_undo_actions()
         self._update_title()
         self.status_label.setText(
@@ -2104,6 +2106,23 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         threading.Thread(target=_warm, daemon=True).start()
+
+    def _refresh_preview_after_edit(self):
+        """
+        Re-composite the frame under the playhead.
+
+        The preview holds whatever was last composited, and nothing
+        redraws it when the clip list changes — so dropping a clip
+        where the playhead already sits left the old frame on screen
+        (the image appeared to be ignored and the video below it
+        shown instead), and deleting one left the deleted clip
+        showing. The cached frame has to go too, or the re-render
+        hands back the same stale composite. Undo has always done
+        this; drop and delete did not.
+        """
+        if self._playback and self._playback._compositor:
+            self._playback._compositor.invalidate_cache()
+        self._scrub_to_playhead()
 
     def _update_playback_clips(self):
         """Sync clip list to playback engine."""

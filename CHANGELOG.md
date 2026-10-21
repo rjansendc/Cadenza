@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — 1.3.3
+
+### Video
+
+- **An image over a video shows again, on a machine with a GPU.**
+  `ImageDecoder` handed back a CPU tensor while `VideoDecoder` put
+  its frames on the compute device, so compositing the two raised
+  `RuntimeError: Expected all tensors to be on the same device, but
+  found at least two devices, cuda:0 and cpu!`. The compositor
+  catches that, logs it and drops the clip — so the image silently
+  vanished and the video beneath showed through, looking as though
+  layer order were being ignored. Images now decode onto the compute
+  device like everything else, and the compositor moves whatever a
+  decoder hands it, so no future decoder can reintroduce it.
+
+  It cannot happen without a GPU, where every tensor is on the CPU
+  already. The tests stand a `meta` device in for a second one, so
+  the mismatch is reproducible on any machine.
+
+### Timeline and editing
+
+- The preview re-composites when a clip is added or removed. It holds
+  whatever was last composited and nothing redrew it when the clip
+  list changed, so dropping an image onto a track above a video —
+  with the playhead already inside where it landed — left the
+  previous frame on screen, and the image looked as though it had
+  been ignored in favor of the video below. Deleting a clip under the
+  playhead left the deleted clip showing. The cached frame is dropped
+  as well as the re-render requested, since a re-render alone returns
+  the same stale composite. Undo has always done this; drop and
+  delete did not.
+
 ## 1.3.2 — 2026-10-20
 
 ### Interface

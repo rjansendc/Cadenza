@@ -344,7 +344,15 @@ class Compositor:
                     if hasattr(frame, 'asnumpy')
                     else frame.__array__()
                 )
-            return frame.float()
+            # and on one device, whichever decoder produced it.
+            # ImageDecoder handed back CPU tensors while VideoDecoder
+            # used the GPU, so compositing an image over a video
+            # raised "Expected all tensors to be on the same device"
+            # and the clip was dropped. A no-op when it is already
+            # there, and it keeps the next decoder from doing it
+            # again.
+            from gpu.device import compute_device
+            return frame.float().to(compute_device())
         except (TypeError, AttributeError) as e:
             # A signature or attribute mismatch is a bug in Cadenza,
             # not a bad file — say which decoder, and say it once per

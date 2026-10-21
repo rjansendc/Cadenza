@@ -483,7 +483,16 @@ class ImageDecoder:
         arr = np.frombuffer(ptr, dtype=np.uint8).reshape(h, bpl)
         # Strip padding — keep only w*3 bytes per row
         arr = arr[:, :w * 3].reshape(h, w, 3)
-        return torch.from_numpy(arr.copy()).float()
+        # On the compute device, like every other decoded frame.
+        # This came back on the CPU while VideoDecoder's frames were
+        # on the GPU, so compositing an image over a video raised
+        # "Expected all tensors to be on the same device" — caught by
+        # the compositor, logged, and the clip dropped, which looked
+        # like the image being ignored in favor of the video beneath
+        # it. Invisible without a GPU, where everything is on the CPU
+        # already.
+        from gpu.device import compute_device
+        return torch.from_numpy(arr.copy()).float().to(compute_device())
 
     def get_frame(self, frame_idx: int,
                    draft: bool = False):
