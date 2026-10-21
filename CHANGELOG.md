@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.3.3
+## 1.3.2 — 2026-10-20
 
 ### Video
 
@@ -31,8 +31,6 @@
   as well as the re-render requested, since a re-render alone returns
   the same stale composite. Undo has always done this; drop and
   delete did not.
-
-## 1.3.2 — 2026-10-20
 
 ### Interface
 
